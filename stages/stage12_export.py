@@ -352,6 +352,25 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
         story.append(_table(rows, [42*mm, 90*mm, 22*mm, 16*mm]))
     else:
         story.append(_body('Keine relevanten Timeline-Events.'))
+
+    story.append(_spacer(5))
+    ts_url = f'http://localhost:5000/sketch/{1}/explore'
+    ts_box = Table(
+        [[Paragraph(
+            f'<font color="#{_hex(C_MID_BLUE)}"><b>Interaktive Timeline (Timesketch)</b></font><br/>'
+            f'<font size="9">{ts_url}</font>',
+            _normal_style()
+        )]],
+        colWidths=[W]
+    )
+    ts_box.setStyle(TableStyle([
+        ('BACKGROUND',   (0,0), (-1,-1), _rl_color_from_tuple(C_LIGHT_BLUE)),
+        ('BOX',          (0,0), (-1,-1), 1.5, _rl_color_from_tuple(C_MID_BLUE)),
+        ('TOPPADDING',   (0,0), (-1,-1), 8),
+        ('BOTTOMPADDING',(0,0), (-1,-1), 8),
+        ('LEFTPADDING',  (0,0), (-1,-1), 10),
+    ]))
+    story.append(ts_box)
     story.append(PageBreak())
 
     # ── Seite 7: System-Profiling & Pipeline-Status ──────────────────────────
