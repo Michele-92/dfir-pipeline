@@ -1,0 +1,26 @@
+timesketch:
+  host:       'http://localhost:5000'
+  username:   'admin'
+  password:   'changeme'   # ÄNDERN!
+  sketch_id:  1
+
+autopsy:
+  binary:     '/usr/bin/autopsy'
+  java_home:  '/usr/lib/jvm/default-java'
+
+hayabusa:
+  binary:     '/opt/hayabusa/hayabusa'
+  rules_dir:  'data/sigma-rules/rules/windows'
+  min_level:  'medium'
+
+ml:
+  contamination:      0.01
+  anomaly_threshold:  0.7
+  max_events:         500000
+
+logging:
+  level:  'INFO'
+  file:   'pipeline.log'
+
+output:
+  base_dir:  './output'

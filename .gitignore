@@ -1,0 +1,24 @@
+# Externe Daten — werden per setup_data.sh heruntergeladen
+data/enterprise-attack-v15.json
+data/yara-rules/community/
+data/yara-rules/signature-base/
+data/sigma-rules/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Output (wird automatisch erstellt)
+output/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

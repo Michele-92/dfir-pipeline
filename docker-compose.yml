@@ -1,0 +1,36 @@
+version: '3.7'
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  timesketch:
+    image: us-docker.pkg.dev/osdfir-registry/timesketch/timesketch:latest
+    environment:
+      - TIMESKETCH_USER=admin
+      - TIMESKETCH_PASSWORD=changeme
+    ports:
+      - "5000:5000"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - ts_data:/var/lib/timesketch
+    restart: unless-stopped
+
+volumes:
+  es_data:
+  ts_data:
