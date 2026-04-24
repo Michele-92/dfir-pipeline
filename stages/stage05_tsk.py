@@ -9,6 +9,14 @@ log = logging.getLogger(__name__)
 
 FS_TYPES = ['ntfs', 'fat32', 'exfat', 'ext4', 'ext3', 'ext2']
 
+LOG_KEYWORDS = [
+    'var/log', 'bash_history', 'zsh_history', 'fish_history',
+    'auth.log', 'syslog', 'kern.log', 'messages', 'secure',
+    'apache', 'nginx', 'mysql', 'postgresql', 'audit', 'fail2ban',
+    'wtmp', 'btmp', 'lastlog', 'utmp', 'dpkg.log', 'apt', 'cron',
+    'openvpn', 'samba', 'postfix', 'vsftpd', 'docker',
+]
+
 
 def run(ctx: PipelineContext) -> PipelineContext:
     if not ctx.dissect_empty:
@@ -38,6 +46,11 @@ def run(ctx: PipelineContext) -> PipelineContext:
             continue
 
         results[f'partition_{offset}'] = part_result
+
+        if fs_type in FS_TYPES and part_result and ctx.case_dir:
+            log_dir = ctx.case_dir / 'raw' / 'log_artefakte'
+            n = _extract_log_files(ctx.disk_image_path, offset, part_result, log_dir)
+            log.info(f'  {n} Log-Dateien aus Partition {offset} extrahiert → {log_dir}')
 
     ctx.tsk_results = results
 
@@ -100,6 +113,40 @@ def _analyse_partition(image_path: Path, offset: int, fs_type: str) -> List[str]
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         log.warning(f'fls fehlgeschlagen: {e}')
     return entries
+
+
+def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str], log_dir: Path) -> int:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    extracted = 0
+    for entry in fls_entries:
+        if not any(kw in entry.lower() for kw in LOG_KEYWORDS):
+            continue
+        parts = entry.split('\t')
+        if len(parts) < 2:
+            continue
+        meta  = parts[0].strip()
+        fpath = parts[1].strip()
+        tokens = meta.split()
+        if len(tokens) < 2:
+            continue
+        inode = tokens[-1].rstrip(':').split('-')[0]
+        if not inode.isdigit():
+            continue
+        out_name = Path(fpath).name
+        out_file = log_dir / out_name
+        if out_file.exists():
+            out_file = log_dir / f'{inode}_{out_name}'
+        try:
+            result = subprocess.run(
+                ['icat', '-o', str(offset), str(image_path), inode],
+                capture_output=True, timeout=30
+            )
+            if result.stdout:
+                out_file.write_bytes(result.stdout)
+                extracted += 1
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+    return extracted
 
 
 def _analyse_xfs(image_path: Path, offset: int) -> List[str]:
