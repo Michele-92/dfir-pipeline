@@ -78,7 +78,7 @@ def _detect_filesystem(image_path: Path, offset: int) -> str:
     try:
         result = subprocess.run(
             ['fsstat', '-o', str(offset), str(image_path)],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, timeout=30, errors='replace'
         )
         output = result.stdout.lower()
         for fs in ['ntfs', 'fat32', 'exfat', 'ext4', 'ext3', 'ext2', 'xfs', 'btrfs']:
@@ -94,7 +94,7 @@ def _analyse_partition(image_path: Path, offset: int, fs_type: str) -> List[str]
     try:
         result = subprocess.run(
             ['fls', '-r', '-o', str(offset), str(image_path)],
-            capture_output=True, text=True, timeout=300
+            capture_output=True, text=True, timeout=300, errors='replace'
         )
         entries = [l for l in result.stdout.splitlines() if l.strip()]
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:

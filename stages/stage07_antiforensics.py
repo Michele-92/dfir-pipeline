@@ -128,10 +128,17 @@ def _check_yara(ctx: PipelineContext) -> List[Dict]:
         return hits
     try:
         import yara
-        rule_files = {f.stem: str(f) for f in rules_dir.rglob('*.yar')}
+        rule_files = list(rules_dir.rglob('*.yar'))
         if not rule_files:
             return hits
-        rules = yara.compile(filepaths=rule_files)
+        compiled = []
+        for rf in rule_files:
+            try:
+                compiled.append(yara.compile(filepath=str(rf)))
+            except Exception:
+                continue
+        if not compiled:
+            return hits
 
         case_dir = ctx.case_dir
         if not case_dir or not case_dir.exists():
@@ -140,20 +147,21 @@ def _check_yara(ctx: PipelineContext) -> List[Dict]:
         for target in case_dir.rglob('*'):
             if not target.is_file() or target.stat().st_size > 50_000_000:
                 continue
-            try:
-                matches = rules.match(str(target), timeout=30)
-                for match in matches:
-                    hits.append({
-                        'type':     'yara_match',
-                        'file':     str(target),
-                        'details':  f'YARA-Regel: {match.rule} Tags: {match.tags}',
-                        'severity': 'high',
-                        'source':   'yara',
-                        'timestamp':'',
-                        'rule':     match.rule,
-                    })
-            except Exception:
-                continue
+            for rule_set in compiled:
+                try:
+                    matches = rule_set.match(str(target), timeout=30)
+                    for match in matches:
+                        hits.append({
+                            'type':     'yara_match',
+                            'file':     str(target),
+                            'details':  f'YARA-Regel: {match.rule} Tags: {match.tags}',
+                            'severity': 'high',
+                            'source':   'yara',
+                            'timestamp':'',
+                            'rule':     match.rule,
+                        })
+                except Exception:
+                    continue
     except ImportError:
         log.warning('yara-python nicht installiert — YARA-Scan übersprungen')
     return hits

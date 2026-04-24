@@ -582,7 +582,7 @@ def _kv_table(rows, width, rl_fn):
 
 
 def _stat_boxes(stats, width, rl_fn):
-    from reportlab.platypus import Table, TableStyle
+    from reportlab.platypus import Table, TableStyle, Paragraph
     n    = len(stats)
     cell_w = width / n
     data = [[Paragraph(f'<font size="22" color="#{_hex(C_MID_BLUE)}"><b>{v}</b></font>'
@@ -748,5 +748,7 @@ def _write_timesketch_link(case_dir: Path, url: str) -> None:
     )
 
 
-# Hilfsfunktion für Paragraph in stat_boxes
-from reportlab.platypus import Paragraph as _Paragraph
+try:
+    from reportlab.platypus import Paragraph as _Paragraph
+except ImportError:
+    pass
