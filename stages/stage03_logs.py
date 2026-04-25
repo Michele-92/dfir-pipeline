@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 from typing import List
 
+from tqdm import tqdm
 from models.pipeline_context import PipelineContext
 from models.event import ForensicEvent
 from utils.event_store import EventStore
@@ -78,8 +79,10 @@ def run(ctx: PipelineContext) -> PipelineContext:
     parser_stats: dict = {}
     batch: List[ForensicEvent] = []
 
+    log.info(f'  Parsing {len(log_files)} Log-Dateien — schreibe Events in DuckDB...')
     with EventStore(db_path) as store:
-        for lf in log_files:
+        progress = tqdm(log_files, unit='Datei', desc='  Stage 3', dynamic_ncols=True)
+        for lf in progress:
             events = route_and_parse(lf)
             if events:
                 batch.extend(events)
@@ -93,6 +96,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
                 total_lines += sum(1 for _ in lf.open('rb'))
             except Exception:
                 pass
+            progress.set_postfix({'Events': f'{parsed_count:,}'})
         if batch:
             store.insert_events(batch)
 

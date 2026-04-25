@@ -132,7 +132,7 @@ def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str], lo
         inode = tokens[-1].rstrip(':').split('-')[0]
         if not inode.isdigit():
             continue
-        out_name = Path(fpath).name
+        out_name = Path(fpath).name.replace(':', '_')
         out_file = log_dir / out_name
         if out_file.exists():
             out_file = log_dir / f'{inode}_{out_name}'

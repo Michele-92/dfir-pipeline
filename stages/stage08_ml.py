@@ -1,4 +1,5 @@
 import logging
+from tqdm import tqdm
 from models.pipeline_context import PipelineContext
 
 log = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
         types     = le_type.fit_transform([e.event_type for e in events])
 
         features = []
-        for i, e in enumerate(events):
+        for i, e in enumerate(tqdm(events, desc='  Feature-Extraktion', unit='Event', dynamic_ncols=True)):
             features.append([
                 e.timestamp.hour,
                 e.timestamp.weekday(),

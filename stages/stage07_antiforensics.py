@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 from typing import List, Dict
 
+from tqdm import tqdm
 from models.pipeline_context import PipelineContext
 
 log = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
 def _check_timestomping(ctx: PipelineContext) -> List[Dict]:
     hits = []
-    for event in ctx.normalized_events:
+    for event in tqdm(ctx.normalized_events, desc='  Timestomping-Scan', unit='Event', leave=False, dynamic_ncols=True):
         msg_lower = event.message.lower()
         if any(kw in msg_lower for kw in TIMESTOMPING_KEYWORDS):
             hits.append({
@@ -52,7 +53,7 @@ def _check_timestomping(ctx: PipelineContext) -> List[Dict]:
 
 def _check_log_wiping(ctx: PipelineContext) -> List[Dict]:
     hits = []
-    for event in ctx.normalized_events:
+    for event in tqdm(ctx.normalized_events, desc='  Log-Wiping-Scan', unit='Event', leave=False, dynamic_ncols=True):
         msg_lower = event.message.lower()
         if any(kw in msg_lower for kw in LOG_WIPE_KEYWORDS):
             hits.append({
@@ -79,7 +80,7 @@ def _check_log_wiping(ctx: PipelineContext) -> List[Dict]:
 
 def _check_rootkit_indicators(ctx: PipelineContext) -> List[Dict]:
     hits = []
-    for event in ctx.normalized_events:
+    for event in tqdm(ctx.normalized_events, desc='  Rootkit-Scan', unit='Event', leave=False, dynamic_ncols=True):
         msg_lower = event.message.lower()
         if any(kw in msg_lower for kw in ROOTKIT_KEYWORDS):
             hits.append({
@@ -107,7 +108,7 @@ def _check_rootkit_indicators(ctx: PipelineContext) -> List[Dict]:
 
 def _check_secure_delete(ctx: PipelineContext) -> List[Dict]:
     hits = []
-    for event in ctx.normalized_events:
+    for event in tqdm(ctx.normalized_events, desc='  Secure-Delete-Scan', unit='Event', leave=False, dynamic_ncols=True):
         msg_lower = event.message.lower()
         if any(kw in msg_lower for kw in SECURE_DELETE_TOOLS):
             hits.append({

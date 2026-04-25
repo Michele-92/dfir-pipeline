@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List
 
+from tqdm import tqdm
 from models.pipeline_context import PipelineContext
 
 log = logging.getLogger(__name__)
@@ -143,7 +144,7 @@ def _load_attack_db() -> Dict:
 
 def _map_events(events, techniques: Dict) -> List[Dict]:
     hits = []
-    for event in events:
+    for event in tqdm(events, desc='  MITRE ATT&CK Mapping', unit='Event', dynamic_ncols=True):
         msg_lower = event.message.lower()
         for keyword, (tech_id, confidence) in KEYWORD_MAP.items():
             if keyword.lower() in msg_lower:
