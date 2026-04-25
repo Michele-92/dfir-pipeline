@@ -5,6 +5,7 @@ from typing import List
 
 from models.pipeline_context import PipelineContext
 from models.event import ForensicEvent
+from utils.event_store import EventStore
 from parsers import (
     JournaldParser, WtmpParser, UtmpParser, LastlogParser, EVTXParser,
     AuthLogParser, SSHParser, CronParser, AuditParser, Fail2BanParser,
@@ -60,26 +61,47 @@ ALL_PARSERS = [
     PlasaFallbackParser(),
 ]
 
+_BATCH_SIZE = 1000
+
 
 def run(ctx: PipelineContext) -> PipelineContext:
     log.info('Stage 3: Log-Parsing')
     log_files = _find_log_files(ctx)
     log.info(f'  {len(log_files)} Log-Dateien gefunden')
 
-    all_events: List[ForensicEvent] = []
-    total_lines = 0
+    db_path = ctx.output_dir / 'events.db'
+    if db_path.exists():
+        db_path.unlink()
 
-    for lf in log_files:
-        events = route_and_parse(lf)
-        all_events.extend(events)
-        try:
-            total_lines += sum(1 for _ in lf.open('rb'))
-        except Exception:
-            pass
+    total_lines  = 0
+    parsed_count = 0
+    parser_stats: dict = {}
+    batch: List[ForensicEvent] = []
 
-    ctx.events         = all_events
-    ctx.total_log_lines = total_lines
-    ctx.parsed_events  = len(all_events)
+    with EventStore(db_path) as store:
+        for lf in log_files:
+            events = route_and_parse(lf)
+            if events:
+                batch.extend(events)
+                parsed_count += len(events)
+                for e in events:
+                    parser_stats[e.source] = parser_stats.get(e.source, 0) + 1
+                if len(batch) >= _BATCH_SIZE:
+                    store.insert_events(batch)
+                    batch.clear()
+            try:
+                total_lines += sum(1 for _ in lf.open('rb'))
+            except Exception:
+                pass
+        if batch:
+            store.insert_events(batch)
+
+    ctx.events_db_path   = db_path
+    ctx.parser_stats     = parser_stats
+    ctx.total_log_lines  = total_lines
+    ctx.parsed_events    = parsed_count
+    ctx.events           = []  # Daten leben in events.db
+
     log.info(f'  {ctx.parsed_events} Events aus {total_lines} Log-Zeilen geparst')
     if ctx.coc:
         ctx.coc.add_entry('stage_03', f'Log-Parsing: {ctx.parsed_events} Events')

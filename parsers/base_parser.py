@@ -32,7 +32,7 @@ class BaseParser(ABC):
 
     def make_event(self, timestamp, source, event_type, message,
                    user=None, ip=None, process=None,
-                   file_path=None, severity='info', raw=None) -> ForensicEvent:
+                   file_path=None, severity='info', **_) -> ForensicEvent:
         from utils.timestamp import to_utc
         return ForensicEvent(
             timestamp   = to_utc(str(timestamp)) if not isinstance(timestamp, datetime) else timestamp,
@@ -44,7 +44,6 @@ class BaseParser(ABC):
             process     = process,
             file_path   = str(file_path) if file_path else None,
             severity    = severity,
-            raw         = raw or {},
         )
 
     def read_lines(self, path: Path) -> List[str]:

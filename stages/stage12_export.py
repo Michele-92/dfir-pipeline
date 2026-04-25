@@ -439,9 +439,7 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
                        'Events sie extrahiert haben.'))
     story.append(_spacer(4))
 
-    parser_counts = {}
-    for e in ctx.events:
-        parser_counts[e.source] = parser_counts.get(e.source, 0) + 1
+    parser_counts = ctx.parser_stats
 
     all_parsers = [
         'syslog','auth','journald','kern','boot','daemon','wtmp','lastlog',

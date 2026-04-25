@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List
 
 
 @dataclass
@@ -16,4 +16,3 @@ class ForensicEvent:
     severity:      str            = 'info'
     anomaly_score: float          = 0.0
     mitre_tags:    List[str]      = field(default_factory=list)
-    raw:           Dict           = field(default_factory=dict)

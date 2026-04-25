@@ -75,8 +75,11 @@ def run(ctx: PipelineContext) -> PipelineContext:
 def _collect_texts(ctx: PipelineContext) -> list:
     sources = []
 
-    for event in ctx.events:
-        sources.append((event.message, event.source))
+    if ctx.events_db_path and ctx.events_db_path.exists():
+        from utils.event_store import EventStore
+        with EventStore(ctx.events_db_path) as store:
+            for event in store.iter_events():
+                sources.append((event.message, event.source))
 
     for key, lines in ctx.disk_artifacts.items():
         for line in lines:

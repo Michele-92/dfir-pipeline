@@ -1,5 +1,6 @@
 import logging
 from models.pipeline_context import PipelineContext
+from utils.event_store import EventStore
 from utils.timestamp import to_utc
 
 log = logging.getLogger(__name__)
@@ -7,24 +8,22 @@ log = logging.getLogger(__name__)
 
 def run(ctx: PipelineContext) -> PipelineContext:
     log.info('Stage 6: Datennormalisierung — alle Timestamps → UTC')
-    normalized = []
 
-    for event in ctx.events:
+    tz = ctx.timezone
+
+    def _to_utc_str(ts_str: str) -> str:
         try:
-            event.timestamp = to_utc(str(event.timestamp), ctx.timezone)
+            return to_utc(ts_str, tz).isoformat()
         except Exception:
-            pass
-        if not event.source:
-            event.source = 'unknown'
-        if not event.event_type:
-            event.event_type = 'generic'
-        if not event.severity:
-            event.severity = 'info'
-        normalized.append(event)
+            return ts_str
 
-    ctx.normalized_events = sorted(normalized, key=lambda e: e.timestamp)
-    log.info(f'  {len(ctx.normalized_events)} Events normalisiert und sortiert (UTC)')
+    with EventStore(ctx.events_db_path) as store:
+        store.normalize_timestamps(_to_utc_str)
+        ctx.normalized_events = store.get_all_sorted()
+
+    count = len(ctx.normalized_events)
+    log.info(f'  {count} Events normalisiert und sortiert (UTC)')
 
     if ctx.coc:
-        ctx.coc.add_entry('stage_06', f'Normalisierung: {len(ctx.normalized_events)} Events → UTC')
+        ctx.coc.add_entry('stage_06', f'Normalisierung: {count} Events → UTC')
     return ctx

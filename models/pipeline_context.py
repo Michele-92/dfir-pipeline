@@ -36,6 +36,8 @@ class PipelineContext:
 
     # ── Stage 3: Log-Parsing ──────────────────────────────
     events:             List[ForensicEvent] = field(default_factory=list)
+    events_db_path:     Optional[Path]      = None
+    parser_stats:       Dict[str, int]      = field(default_factory=dict)
     total_log_lines:    int = 0
     parsed_events:      int = 0
 

@@ -215,7 +215,8 @@ dfir_pipeline/
 │   ├── hashing.py                 ← SHA256/MD5 Berechnung
 │   ├── timestamp.py               ← Timestamp-Normalisierung → UTC
 │   ├── file_detection.py          ← Datei-Format-Erkennung
-│   └── logger.py                  ← Logging-Konfiguration
+│   ├── logger.py                  ← Logging-Konfiguration
+│   └── event_store.py             ← DuckDB Event-Store (RAM-Entlastung, v3.1)
 │
 ├── data/                          ← Statische Daten (einmalig herunterladen)
 │   ├── enterprise-attack-v15.json ← MITRE ATT&CK v15 (ca. 80 MB)
@@ -300,7 +301,9 @@ class PipelineContext:
     # log_paths wird von Stage 2.5 gesetzt und von Stage 3 genutzt
  
     # ── Stage 3: Log-Parsing ──────────────────────────────
-    events:            List['ForensicEvent'] = field(default_factory=list)
+    events:            List['ForensicEvent'] = field(default_factory=list)  # leer nach v3.1
+    events_db_path:    Optional[Path] = None          # Pfad zur events.db (DuckDB)
+    parser_stats:      Dict[str, int] = field(default_factory=dict)  # Events pro Parser
     total_log_lines:   int = 0
     parsed_events:     int = 0
  
@@ -369,7 +372,7 @@ class ForensicEvent:
     severity:     str = 'info'      # 'info', 'low', 'medium', 'high', 'critical'
     anomaly_score: float = 0.0      # 0.0 = normal, 1.0 = sehr verdächtig
     mitre_tags:   List[str] = field(default_factory=list)  # ['T1053.003']
-    raw:          Dict = field(default_factory=dict)  # Originaldaten
+    # raw-Feld entfernt (v3.1) — spart ~800 MB bei 3,4 Mio Events
 ```
  
  
@@ -641,7 +644,7 @@ def detect_os_family(ctx: PipelineContext) -> PipelineContext:
 >
 > Plaso = Parser 38 (Fallback), Hayabusa = wird von EVTXParser aufgerufen, Journald = Parser 3
 >
-> Ergebnis: Liste von ForensicEvent-Objekten in ctx.events
+> Ergebnis (v3.1): Events werden in DuckDB-Datei (events.db) gespeichert — ctx.events bleibt leer um RAM zu sparen
  
  
  
@@ -658,7 +661,7 @@ def detect_os_family(ctx: PipelineContext) -> PipelineContext:
 >
 > 5. Kein Parser passt → PlasaFallbackParser als letzter Ausweg
 >
-> 6. Alle Events aus allen Parsern fließen in ctx.events
+> 6. Alle Events werden in 1000er-Batches in DuckDB (events.db) geschrieben — nie komplett im RAM
  
  
  
@@ -980,13 +983,12 @@ def to_utc(raw_timestamp: str, system_tz: str = 'UTC') -> datetime:
     except Exception:
         return datetime.min.replace(tzinfo=timezone.utc)
  
-# stages/stage06_normalize.py
+# stages/stage06_normalize.py (v3.1 — DuckDB)
 def run(ctx: PipelineContext) -> PipelineContext:
-    normalized = []
-    for event in ctx.events:
-        event.timestamp = to_utc(str(event.timestamp), ctx.timezone)
-        normalized.append(event)
-    ctx.normalized_events = sorted(normalized, key=lambda e: e.timestamp)
+    # Normalisierung per SQL-UPDATE direkt in DuckDB — kein RAM-Peak
+    with EventStore(ctx.events_db_path) as store:
+        store.normalize_timestamps(lambda ts: to_utc(ts, ctx.timezone).isoformat())
+        ctx.normalized_events = store.get_all_sorted()  # einmalig laden
     return ctx
 ```
  
@@ -1304,6 +1306,7 @@ pip install yara-python==4.3.1
 pip install python-dateutil==2.9.0
 pip install pytz==2024.1
 pip install numpy==1.26.4
+pip install duckdb  # Event-Store (RAM-Entlastung)
 ```
  
  
@@ -3789,6 +3792,9 @@ timesketch-api-client==20240101   # Timesketch Upload
 # ── MITRE ATT&CK ─────────────────────────────────────────────
 attackcti==0.3.4                  # ATT&CK API (für Updates)
  
+# ── Datenbank ────────────────────────────────────────────────
+duckdb>=0.10.0                    # Event-Store (RAM-Entlastung, skalierbar bis 4 TB)
+
 # ── Konfiguration ────────────────────────────────────────────
 pyyaml==6.0.1                     # config.yaml lesen
  
