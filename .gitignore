@@ -15,6 +15,9 @@ venv/
 # Output (wird automatisch erstellt)
 output/
 
+# Konfiguration mit Passwörtern — nie committen
+config.yaml
+
 # IDE
 .vscode/
 .idea/
