@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 from typing import List
 
+from tqdm import tqdm
 from models.pipeline_context import PipelineContext
 
 log = logging.getLogger(__name__)
@@ -118,9 +119,10 @@ def _analyse_partition(image_path: Path, offset: int, fs_type: str) -> List[str]
 def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str], log_dir: Path) -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
     extracted = 0
-    for entry in fls_entries:
-        if not any(kw in entry.lower() for kw in LOG_KEYWORDS):
-            continue
+    relevant = [e for e in fls_entries if any(kw in e.lower() for kw in LOG_KEYWORDS)]
+    log.info(f'  {len(relevant):,} Log-relevante Einträge gefunden — starte Extraktion...')
+    progress = tqdm(relevant, desc=f'  Extraktion offset={offset}', unit='Datei', dynamic_ncols=True)
+    for entry in progress:
         parts = entry.split('\t')
         if len(parts) < 2:
             continue
@@ -144,6 +146,7 @@ def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str], lo
             if result.stdout:
                 out_file.write_bytes(result.stdout)
                 extracted += 1
+                progress.set_postfix({'extrahiert': extracted})
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
     return extracted
