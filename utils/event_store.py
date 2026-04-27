@@ -106,7 +106,7 @@ class EventStore:
 
     def normalize_timestamps(self, to_utc_fn):
         """Normalisiert alle Timestamps per Python-UDF und bereinigt Pflichtfelder."""
-        self._conn.create_function('py_to_utc', 1, to_utc_fn)
+        self._conn.create_function('py_to_utc', to_utc_fn)
         self._conn.execute("""
             UPDATE events SET
                 timestamp  = CAST(py_to_utc(CAST(timestamp AS VARCHAR)) AS TIMESTAMP),
