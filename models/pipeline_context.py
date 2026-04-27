@@ -34,6 +34,9 @@ class PipelineContext:
     timezone:           str  = 'UTC'
     log_paths:          Dict[str, Path] = field(default_factory=dict)
 
+    # ── Performance ───────────────────────────────────────
+    workers:            int                 = 2
+
     # ── Stage 3: Log-Parsing ──────────────────────────────
     events:             List[ForensicEvent] = field(default_factory=list)
     events_db_path:     Optional[Path]      = None

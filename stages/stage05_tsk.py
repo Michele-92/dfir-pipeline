@@ -1,7 +1,8 @@
 import subprocess
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 from tqdm import tqdm
 from models.pipeline_context import PipelineContext
@@ -50,7 +51,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
         if fs_type in FS_TYPES and part_result and ctx.case_dir:
             log_dir = ctx.case_dir / 'raw' / 'log_artefakte'
-            n = _extract_log_files(ctx.disk_image_path, offset, part_result, log_dir)
+            n = _extract_log_files(ctx.disk_image_path, offset, part_result, log_dir, ctx.workers)
             log.info(f'  {n} Log-Dateien aus Partition {offset} extrahiert → {log_dir}')
 
     ctx.tsk_results = results
@@ -116,18 +117,36 @@ def _analyse_partition(image_path: Path, offset: int, fs_type: str) -> List[str]
     return entries
 
 
-def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str], log_dir: Path) -> int:
+def _icat_extract(args: Tuple) -> bool:
+    image_path, offset, inode, out_file = args
+    try:
+        result = subprocess.run(
+            ['icat', '-o', str(offset), str(image_path), inode],
+            capture_output=True, timeout=30
+        )
+        if result.stdout:
+            out_file.write_bytes(result.stdout)
+            return True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return False
+
+
+def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str],
+                       log_dir: Path, workers: int = 2) -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
-    extracted = 0
-    relevant = [e for e in fls_entries if any(kw in e.lower() for kw in LOG_KEYWORDS)]
-    log.info(f'  {len(relevant):,} Log-relevante Einträge gefunden — starte Extraktion...')
-    progress = tqdm(relevant, desc=f'  Extraktion offset={offset}', unit='Datei', dynamic_ncols=True)
-    for entry in progress:
+
+    # Phase 1: Relevante Einträge filtern und Dateinamen vorab eindeutig vergeben
+    work_items: List[Tuple] = []
+    used_names: set = set()
+    for entry in fls_entries:
+        if not any(kw in entry.lower() for kw in LOG_KEYWORDS):
+            continue
         parts = entry.split('\t')
         if len(parts) < 2:
             continue
-        meta  = parts[0].strip()
-        fpath = parts[1].strip()
+        meta   = parts[0].strip()
+        fpath  = parts[1].strip()
         tokens = meta.split()
         if len(tokens) < 2:
             continue
@@ -135,20 +154,32 @@ def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str], lo
         if not inode.isdigit():
             continue
         out_name = Path(fpath).name.replace(':', '_')
-        out_file = log_dir / out_name
-        if out_file.exists():
-            out_file = log_dir / f'{inode}_{out_name}'
-        try:
-            result = subprocess.run(
-                ['icat', '-o', str(offset), str(image_path), inode],
-                capture_output=True, timeout=30
-            )
-            if result.stdout:
-                out_file.write_bytes(result.stdout)
-                extracted += 1
-                progress.set_postfix({'extrahiert': extracted})
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            continue
+        if out_name in used_names:
+            out_name = f'{inode}_{out_name}'
+        used_names.add(out_name)
+        work_items.append((image_path, offset, inode, log_dir / out_name))
+
+    log.info(f'  {len(work_items):,} Log-relevante Einträge gefunden — starte Extraktion mit {workers} Threads...')
+
+    # Phase 2: Parallel extrahieren mit ThreadPoolExecutor
+    extracted = 0
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(_icat_extract, item): item for item in work_items}
+        progress = tqdm(
+            as_completed(futures),
+            total=len(work_items),
+            desc=f'  Extraktion offset={offset}',
+            unit='Datei',
+            dynamic_ncols=True,
+        )
+        for future in progress:
+            try:
+                if future.result():
+                    extracted += 1
+                    progress.set_postfix({'extrahiert': extracted})
+            except Exception:
+                pass
+
     return extracted
 
 

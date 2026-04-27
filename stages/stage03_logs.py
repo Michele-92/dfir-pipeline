@@ -1,5 +1,6 @@
 import logging
 import subprocess
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import List
 
@@ -66,9 +67,11 @@ _BATCH_SIZE = 1000
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 3: Log-Parsing')
+    workers = ctx.workers
+    log.info(f'Stage 3: Log-Parsing ({workers} Worker)')
     log_files = _find_log_files(ctx)
     log.info(f'  {len(log_files)} Log-Dateien gefunden')
+    log.info(f'  Parsing mit {workers} parallelen Worker-Prozessen — schreibe Events in DuckDB...')
 
     db_path = ctx.output_dir / 'events.db'
     if db_path.exists():
@@ -79,24 +82,36 @@ def run(ctx: PipelineContext) -> PipelineContext:
     parser_stats: dict = {}
     batch: List[ForensicEvent] = []
 
-    log.info(f'  Parsing {len(log_files)} Log-Dateien — schreibe Events in DuckDB...')
     with EventStore(db_path) as store:
-        progress = tqdm(log_files, unit='Datei', desc='  Stage 3', dynamic_ncols=True)
-        for lf in progress:
-            events = route_and_parse(lf)
-            if events:
-                batch.extend(events)
-                parsed_count += len(events)
-                for e in events:
-                    parser_stats[e.source] = parser_stats.get(e.source, 0) + 1
-                if len(batch) >= _BATCH_SIZE:
-                    store.insert_events(batch)
-                    batch.clear()
-            try:
-                total_lines += sum(1 for _ in lf.open('rb'))
-            except Exception:
-                pass
-            progress.set_postfix({'Events': f'{parsed_count:,}'})
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(route_and_parse, lf): lf for lf in log_files}
+            progress = tqdm(
+                as_completed(futures),
+                total=len(log_files),
+                unit='Datei',
+                desc='  Stage 3',
+                dynamic_ncols=True,
+            )
+            for future in progress:
+                lf = futures[future]
+                try:
+                    events = future.result()
+                except Exception as e:
+                    log.warning(f'Parser fehlgeschlagen für {lf.name}: {e}')
+                    events = []
+                if events:
+                    batch.extend(events)
+                    parsed_count += len(events)
+                    for e in events:
+                        parser_stats[e.source] = parser_stats.get(e.source, 0) + 1
+                    if len(batch) >= _BATCH_SIZE:
+                        store.insert_events(batch)
+                        batch.clear()
+                try:
+                    total_lines += sum(1 for _ in lf.open('rb'))
+                except Exception:
+                    pass
+                progress.set_postfix({'Events': f'{parsed_count:,}'})
         if batch:
             store.insert_events(batch)
 

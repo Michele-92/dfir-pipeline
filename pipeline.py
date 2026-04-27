@@ -65,6 +65,8 @@ def main():
     parser.add_argument('--no-autopsy',    action='store_true', help='Autopsy deaktivieren')
     parser.add_argument('--no-timesketch', action='store_true', help='Timesketch-Upload deaktivieren')
     parser.add_argument('--debug',         action='store_true', help='Debug-Logging aktivieren')
+    parser.add_argument('--workers',       type=int, default=2,
+                        help='Anzahl paralleler Worker für Stage 3 + Stage 5 (Standard: 2)')
     args = parser.parse_args()
 
     if args.debug:
@@ -80,6 +82,7 @@ def main():
         ram_dump_path   = Path(args.ram)  if args.ram  else None,
         logs_dir_path   = Path(args.logs) if args.logs else None,
         output_dir      = Path(args.output_dir),
+        workers         = args.workers,
     )
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
