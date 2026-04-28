@@ -97,20 +97,30 @@ def main():
 
         uploaded = False
 
-        # Methode 1: timesketch_import_client
+        # Methode 1: sketch.upload() — neueste API
         try:
-            from timesketch_import_client import importer
-            print('Verwende ImportStreamer...')
-            with importer.ImportStreamer() as streamer:
-                streamer.set_sketch(sk)
-                streamer.set_timeline_name(timeline_name)
-                streamer.add_file(str(tmp_jsonl))
+            print('Verwende sketch.upload()...')
+            sk.upload(timeline_name, str(tmp_jsonl))
             uploaded = True
-            print('Upload via ImportStreamer erfolgreich')
-        except ImportError:
-            print('timesketch_import_client nicht installiert — versuche Alternative')
+            print('Upload via sketch.upload() erfolgreich')
         except Exception as e:
-            print(f'ImportStreamer fehlgeschlagen: {e}')
+            print(f'sketch.upload() fehlgeschlagen: {e}')
+
+        # Methode 2: timesketch_import_client
+        if not uploaded:
+            try:
+                from timesketch_import_client import importer
+                print('Verwende ImportStreamer...')
+                with importer.ImportStreamer() as streamer:
+                    streamer.set_sketch(sk)
+                    streamer.set_timeline_name(timeline_name)
+                    streamer.add_file(str(tmp_jsonl))
+                uploaded = True
+                print('Upload via ImportStreamer erfolgreich')
+            except ImportError:
+                print('timesketch_import_client nicht installiert')
+            except Exception as e:
+                print(f'ImportStreamer fehlgeschlagen: {e}')
 
         # Methode 2: REST API mit korrektem Login
         if not uploaded:
