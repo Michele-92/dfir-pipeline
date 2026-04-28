@@ -89,18 +89,25 @@ def main():
             for e in store.iter_events():
                 if written >= limit:
                     break
-                if e.timestamp.year < 1970:
+                # Ungültige Timestamps filtern
+                if e.timestamp.year < 2000:
+                    skipped += 1
+                    continue
+                # Binär-Nachrichten filtern
+                msg = e.message or ''
+                non_printable = sum(1 for c in msg if ord(c) < 32 and c not in '\n\r\t')
+                if len(msg) > 0 and non_printable / len(msg) > 0.1:
                     skipped += 1
                     continue
                 f.write(json.dumps({
                     'datetime':       e.timestamp.isoformat(),
                     'timestamp_desc': e.event_type or 'generic',
-                    'message':        e.message,
+                    'message':        msg[:500],
                     'source':         e.source,
                 }) + '\n')
                 written += 1
         if skipped:
-            print(f'{skipped:,} Events mit ungültigem Timestamp übersprungen')
+            print(f'{skipped:,} Events gefiltert (ungültige Timestamps oder Binär-Daten)')
 
     print(f'{min(total, limit):,} Events gespeichert → {jsonl_path}')
 
