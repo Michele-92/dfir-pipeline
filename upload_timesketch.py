@@ -97,32 +97,34 @@ def main():
 
         uploaded = False
 
-        # Methode 1: timesketch_importer CLI (offiziell empfohlen)
+        # Methode 1: Authentifizierte Session des API-Clients direkt nutzen
         try:
-            import subprocess
-            print('Verwende timesketch_importer CLI...')
-            result = subprocess.run(
-                [
-                    'timesketch_importer',
-                    '--host', host,
-                    '--username', user,
-                    '--password', passwd,
-                    '--sketch_id', str(sketch),
-                    '--timeline_name', timeline_name,
-                    str(tmp_jsonl),
-                ],
-                capture_output=True, text=True, timeout=300
-            )
-            print(result.stdout)
-            if result.returncode == 0:
-                uploaded = True
-                print('Upload via CLI erfolgreich')
-            else:
-                print(f'CLI Fehler: {result.stderr[:300]}')
-        except FileNotFoundError:
-            print('timesketch_importer CLI nicht gefunden')
+            print('Verwende authentifizierte API-Session...')
+            session = cli.session
+            csrf = session.cookies.get('csrftoken', '')
+            print(f'CSRF Token vorhanden: {bool(csrf)}')
+
+            # Versuche verschiedene Upload-Endpunkte
+            for endpoint in ['/api/v1/upload/', '/api/v1/files/', '/api/v1/upload']:
+                with open(tmp_jsonl, 'rb') as f:
+                    resp = session.post(
+                        f'{host}{endpoint}',
+                        headers={
+                            'X-CSRFToken': csrf,
+                            'Referer': f'{host}/',
+                        },
+                        files={'file': (f'{timeline_name}.jsonl', f, 'application/jsonlines')},
+                        data={'name': timeline_name, 'sketch_id': str(sketch)},
+                    )
+                print(f'  {endpoint} → Status {resp.status_code}')
+                if resp.status_code in (200, 201):
+                    uploaded = True
+                    print(f'Upload via {endpoint} erfolgreich')
+                    break
+                elif resp.status_code != 404:
+                    print(f'  Antwort: {resp.text[:200]}')
         except Exception as e:
-            print(f'CLI fehlgeschlagen: {e}')
+            print(f'API-Session Upload fehlgeschlagen: {e}')
 
         # Methode 2: timesketch_import_client Python API
         if not uploaded:
