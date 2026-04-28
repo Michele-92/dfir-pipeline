@@ -65,7 +65,7 @@ def main():
         if total > limit:
             print(f'Lade erste {limit:,} Events...')
 
-        tmp_jsonl = Path(tempfile.mktemp(suffix='.jsonl'))
+        tmp_jsonl = script_dir / 'events_upload.jsonl'
         with open(tmp_jsonl, 'w') as f:
             for i, e in enumerate(store.iter_events()):
                 if i >= limit:
@@ -208,8 +208,11 @@ def main():
                 print(f'REST Fehler: {resp.text[:300]}')
 
         if not uploaded:
-            print('\nHINWEIS: Installiere timesketch-import-client:')
-            print('pip install timesketch-import-client')
+            print(f'\nJSONL-Datei gespeichert: {tmp_jsonl}')
+            print('\nFühre diese Befehle aus um den Upload im Container durchzuführen:')
+            print(f'  sudo docker cp {tmp_jsonl} timesketch-web:/tmp/events_upload.jsonl')
+            print(f'  sudo docker exec timesketch-web python3 /tmp/upload_inside_container.py')
+            print(f'  sudo docker cp ~/dfir-pipeline/upload_inside_container.py timesketch-web:/tmp/upload_inside_container.py')
             sys.exit(1)
 
         url = f'{host}/sketch/{sketch}/explore'
@@ -221,9 +224,6 @@ def main():
     except Exception as e:
         print(f'FEHLER: {e}')
         sys.exit(1)
-    finally:
-        if tmp_jsonl.exists():
-            tmp_jsonl.unlink()
 
 
 if __name__ == '__main__':
