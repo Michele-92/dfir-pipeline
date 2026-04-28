@@ -16,15 +16,12 @@ from utils.event_store import EventStore
 
 
 def find_latest_case_dir(base_dir: Path) -> Path:
-    """Findet das neueste Case-Verzeichnis mit events.db."""
-    # Suche zuerst in Case-Unterverzeichnissen
     candidates = sorted(
         [p for p in base_dir.rglob('events.db') if 'case_' in str(p)],
         key=lambda p: p.stat().st_mtime
     )
     if candidates:
         return candidates[-1]
-    # Fallback: alle events.db
     candidates = sorted(base_dir.rglob('events.db'), key=lambda p: p.stat().st_mtime)
     if not candidates:
         raise FileNotFoundError(f'Keine events.db in {base_dir} gefunden')
@@ -59,14 +56,14 @@ def main():
     print(f'Gefunden: {db_path}')
     print(f'Case-Verzeichnis: {case_dir.name}')
 
-    # Events aus DB lesen und als JSONL-Datei speichern
+    # Events aus DB lesen
     print('Lese Events aus DuckDB...')
     limit = 50000
     with EventStore(db_path) as store:
         total = store.count()
         print(f'{total:,} Events in DB')
         if total > limit:
-            print(f'Lade erste {limit:,} Events (Timesketch-Limit)...')
+            print(f'Lade erste {limit:,} Events...')
 
         tmp_jsonl = Path(tempfile.mktemp(suffix='.jsonl'))
         with open(tmp_jsonl, 'w') as f:
@@ -81,24 +78,29 @@ def main():
                 }
                 f.write(json.dumps(row) + '\n')
 
-    print(f'Events als JSONL gespeichert: {tmp_jsonl}')
+    print(f'{min(total, limit):,} Events als JSONL gespeichert')
 
     # Zu Timesketch hochladen
-    print(f'Verbinde mit Timesketch: {host}...')
+    print(f'\nVerbinde mit Timesketch: {host}...')
+    timeline_name = f'DFIR_{case_dir.name}'
+
     try:
         from timesketch_api_client import client as ts_client
         cli = ts_client.TimesketchApi(host, user, passwd)
         sk  = cli.get_sketch(sketch)
 
-        timeline_name = f'DFIR_{case_dir.name}'
-        print(f'Lade hoch als Timeline: {timeline_name}...')
+        # Zeige verfügbare Upload-Methoden
+        upload_methods = [m for m in dir(sk) if any(
+            kw in m.lower() for kw in ['timeline', 'upload', 'add', 'import']
+        )]
+        print(f'Verfügbare Methoden: {upload_methods}')
 
-        # Versuche verschiedene Upload-Methoden je nach API-Version
         uploaded = False
 
-        # Methode 1: timesketch_import_client (neueste Version)
+        # Methode 1: timesketch_import_client
         try:
             from timesketch_import_client import importer
+            print('Verwende ImportStreamer...')
             with importer.ImportStreamer() as streamer:
                 streamer.set_sketch(sk)
                 streamer.set_timeline_name(timeline_name)
@@ -106,52 +108,66 @@ def main():
             uploaded = True
             print('Upload via ImportStreamer erfolgreich')
         except ImportError:
-            pass
+            print('timesketch_import_client nicht installiert — versuche Alternative')
         except Exception as e:
             print(f'ImportStreamer fehlgeschlagen: {e}')
 
-        # Methode 2: add_timeline_from_json (ältere Version)
+        # Methode 2: REST API mit korrektem Login
         if not uploaded:
-            try:
-                events = [json.loads(line) for line in open(tmp_jsonl)]
-                sk.add_timeline_from_json(json.dumps(events), timeline_name=timeline_name)
-                uploaded = True
-                print('Upload via add_timeline_from_json erfolgreich')
-            except Exception as e:
-                print(f'add_timeline_from_json fehlgeschlagen: {e}')
-
-        # Methode 3: Direkt via REST API
-        if not uploaded:
+            print('Verwende REST API...')
             import requests
             session = requests.Session()
-            r = session.get(f'{host}/api/v1/sketches/{sketch}/',
-                           auth=(user, passwd))
-            csrf = r.cookies.get('csrftoken', '')
+
+            # Login-Seite aufrufen für CSRF-Token
+            r = session.get(f'{host}/login/')
+            csrf = session.cookies.get('csrftoken', '')
+            print(f'CSRF Token: {csrf[:20]}...' if csrf else 'Kein CSRF Token')
+
+            # Einloggen
+            r = session.post(
+                f'{host}/login/',
+                data={
+                    'username': user,
+                    'password': passwd,
+                    'csrfmiddlewaretoken': csrf,
+                },
+                headers={
+                    'Referer': f'{host}/login/',
+                    'X-CSRFToken': csrf,
+                }
+            )
+            print(f'Login Status: {r.status_code}')
+
+            # Neuen CSRF-Token nach Login holen
+            csrf = session.cookies.get('csrftoken', csrf)
+
+            # Timeline erstellen via REST
             with open(tmp_jsonl, 'rb') as f:
                 resp = session.post(
                     f'{host}/api/v1/sketches/{sketch}/timelines/',
-                    headers={'X-CSRFToken': csrf, 'Referer': host},
-                    files={'file': (f'{timeline_name}.jsonl', f, 'application/json')},
+                    headers={
+                        'X-CSRFToken': csrf,
+                        'Referer': f'{host}/',
+                    },
+                    files={'file': (f'{timeline_name}.jsonl', f, 'application/jsonlines')},
                     data={'name': timeline_name},
-                    auth=(user, passwd)
                 )
+            print(f'Upload Status: {resp.status_code}')
             if resp.status_code in (200, 201):
                 uploaded = True
                 print('Upload via REST API erfolgreich')
             else:
-                print(f'REST API Fehler: {resp.status_code} {resp.text[:200]}')
+                print(f'REST Fehler: {resp.text[:300]}')
 
         if not uploaded:
-            print('FEHLER: Kein Upload-Verfahren hat funktioniert')
+            print('\nHINWEIS: Installiere timesketch-import-client:')
+            print('pip install timesketch-import-client')
             sys.exit(1)
 
         url = f'{host}/sketch/{sketch}/explore'
-        print(f'\nErfolgreich hochgeladen!')
-        print(f'Timesketch URL: {url}')
-
+        print(f'\nErfolgreich! Timesketch URL: {url}')
         (case_dir / 'timesketch_link.txt').write_text(
-            f'Timesketch URL: {url}\n'
-            f'Erstellt: {datetime.utcnow().isoformat()}Z\n'
+            f'Timesketch URL: {url}\nErstellt: {datetime.utcnow().isoformat()}Z\n'
         )
 
     except Exception as e:
