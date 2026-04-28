@@ -97,50 +97,52 @@ def main():
 
         uploaded = False
 
-        # Debug: Session-Info anzeigen
         session = cli.session
-        auth_header = session.headers.get('Authorization', '')
-        print(f'Auth-Header: {auth_header[:50] if auth_header else "keiner"}')
         print(f'Session-Cookies: {list(session.cookies.keys())}')
 
-        # Methode 1: Basic Auth direkt (kein CSRF nötig)
-        try:
-            import requests as req
-            print('Verwende Basic Auth Upload...')
-            with open(tmp_jsonl, 'rb') as f:
-                resp = req.post(
-                    f'{host}/api/v1/upload/',
-                    auth=(user, passwd),
-                    files={'file': (f'{timeline_name}.jsonl', f, 'application/jsonlines')},
-                    data={'name': timeline_name, 'sketch_id': str(sketch)},
-                )
-            print(f'Basic Auth Upload → Status {resp.status_code}')
-            if resp.status_code in (200, 201):
-                uploaded = True
-                print('Upload via Basic Auth erfolgreich')
-            else:
-                print(f'Antwort: {resp.text[:300]}')
-        except Exception as e:
-            print(f'Basic Auth fehlgeschlagen: {e}')
+        # CSRF-Token aus HTML extrahieren (Flask-WTF)
+        import re
+        csrf = ''
+        for url in [f'{host}/sketch/{sketch}/', f'{host}/', f'{host}/login/']:
+            r = session.get(url)
+            # Suche CSRF-Token in HTML (verschiedene Formate)
+            for pattern in [
+                r'csrf_token.*?value="([^"]+)"',
+                r'<meta name="csrf-token" content="([^"]+)"',
+                r'"csrfToken":\s*"([^"]+)"',
+                r'csrf[_-]token["\s:=]+([A-Za-z0-9_\-\.]+)',
+            ]:
+                m = re.search(pattern, r.text, re.IGNORECASE)
+                if m:
+                    csrf = m.group(1)
+                    print(f'CSRF gefunden in {url}: {csrf[:20]}...')
+                    break
+            if csrf:
+                break
+        print(f'CSRF Token vorhanden: {bool(csrf)}')
 
-        # Methode 2: Authorization-Header aus API-Client übernehmen
-        if not uploaded and auth_header:
+        # Methode 1: Upload mit CSRF aus HTML
+        if csrf:
             try:
-                print('Verwende Authorization-Header...')
+                print('Verwende Session + CSRF-Token aus HTML...')
                 with open(tmp_jsonl, 'rb') as f:
                     resp = session.post(
                         f'{host}/api/v1/upload/',
-                        headers={'Authorization': auth_header, 'Referer': f'{host}/'},
+                        headers={
+                            'X-CSRFToken': csrf,
+                            'Referer': f'{host}/',
+                        },
                         files={'file': (f'{timeline_name}.jsonl', f, 'application/jsonlines')},
                         data={'name': timeline_name, 'sketch_id': str(sketch)},
                     )
-                print(f'Auth-Header Upload → Status {resp.status_code}')
+                print(f'Upload → Status {resp.status_code}')
                 if resp.status_code in (200, 201):
                     uploaded = True
+                    print('Upload erfolgreich!')
                 else:
                     print(f'Antwort: {resp.text[:300]}')
             except Exception as e:
-                print(f'Auth-Header Upload fehlgeschlagen: {e}')
+                print(f'Upload fehlgeschlagen: {e}')
 
         # Methode 2: timesketch_import_client Python API
         if not uploaded:
