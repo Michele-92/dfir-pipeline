@@ -83,16 +83,24 @@ def main():
         print(f'{total:,} Events in DB')
         if total > limit:
             print(f'Lade erste {limit:,} Events...')
+        skipped = 0
         with open(jsonl_path, 'w') as f:
-            for i, e in enumerate(store.iter_events()):
-                if i >= limit:
+            written = 0
+            for e in store.iter_events():
+                if written >= limit:
                     break
+                if e.timestamp.year < 1970:
+                    skipped += 1
+                    continue
                 f.write(json.dumps({
                     'datetime':       e.timestamp.isoformat(),
                     'timestamp_desc': e.event_type or 'generic',
                     'message':        e.message,
                     'source':         e.source,
                 }) + '\n')
+                written += 1
+        if skipped:
+            print(f'{skipped:,} Events mit ungültigem Timestamp übersprungen')
 
     print(f'{min(total, limit):,} Events gespeichert → {jsonl_path}')
 

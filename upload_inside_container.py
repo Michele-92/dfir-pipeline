@@ -44,7 +44,24 @@ if m:
 print(f'CSRF nach Login: {bool(csrf)}')
 
 # Upload
-with open(JSONL, 'rb') as f:
+import json as _json
+import tempfile as _tmp
+_fixed = _tmp.mktemp(suffix='.jsonl')
+_skipped = 0
+with open(JSONL) as _fin, open(_fixed, 'w') as _fout:
+    for _line in _fin:
+        try:
+            _row = _json.loads(_line)
+            _year = int(_row.get('datetime', '1970')[:4])
+            if _year < 1970:
+                _skipped += 1
+                continue
+            _fout.write(_line)
+        except Exception:
+            _skipped += 1
+print(f'Übersprungen (Jahr < 1970): {_skipped}')
+
+with open(_fixed, 'rb') as f:
     resp = session.post(
         f'{HOST}/api/v1/upload/',
         headers={'X-CSRFToken': csrf, 'Referer': f'{HOST}/'},
