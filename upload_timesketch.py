@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 Timesketch Upload Script
-Sucht automatisch die neueste events.db und lädt alle Events hoch.
+Sucht automatisch die neueste events.db und speichert JSONL im Case-Ordner.
 Verwendung: python upload_timesketch.py
 """
 import json
+import re
 import sys
-import tempfile
 from pathlib import Path
 from datetime import datetime
 
@@ -15,17 +15,33 @@ import yaml
 from utils.event_store import EventStore
 
 
-def find_latest_case_dir(base_dir: Path) -> Path:
+def find_events_db(output_dir: Path) -> Path:
+    """Findet die events.db im Output-Verzeichnis."""
+    db = output_dir / 'events.db'
+    if db.exists():
+        return db
+    candidates = sorted(output_dir.rglob('events.db'), key=lambda p: p.stat().st_mtime)
+    if not candidates:
+        raise FileNotFoundError(f'Keine events.db in {output_dir} gefunden')
+    return candidates[-1]
+
+
+def find_latest_case_dir(output_dir: Path) -> Path:
+    """Findet das neueste Case-Verzeichnis anhand von pipeline_report.json."""
     candidates = sorted(
-        [p for p in base_dir.rglob('events.db') if 'case_' in str(p)],
+        output_dir.rglob('pipeline_report.json'),
+        key=lambda p: p.stat().st_mtime
+    )
+    if candidates:
+        return candidates[-1].parent
+    # Fallback: neuestes case_* Verzeichnis
+    candidates = sorted(
+        [p for p in output_dir.rglob('*') if p.is_dir() and 'case_' in p.name],
         key=lambda p: p.stat().st_mtime
     )
     if candidates:
         return candidates[-1]
-    candidates = sorted(base_dir.rglob('events.db'), key=lambda p: p.stat().st_mtime)
-    if not candidates:
-        raise FileNotFoundError(f'Keine events.db in {base_dir} gefunden')
-    return candidates[-1]
+    return output_dir
 
 
 def main():
@@ -45,18 +61,21 @@ def main():
     passwd  = ts_cfg.get('password', 'changeme')
     sketch  = ts_cfg.get('sketch_id', 1)
 
-    # Neueste events.db suchen
     output_dir = Path.home() / 'output'
     if not output_dir.exists():
         output_dir = script_dir / 'output'
 
-    print(f'Suche events.db in {output_dir}...')
-    db_path = find_latest_case_dir(output_dir)
-    case_dir = db_path.parent
-    print(f'Gefunden: {db_path}')
-    print(f'Case-Verzeichnis: {case_dir.name}')
+    # events.db und Case-Verzeichnis finden
+    print(f'Suche in {output_dir}...')
+    db_path  = find_events_db(output_dir)
+    case_dir = find_latest_case_dir(output_dir)
+    print(f'events.db:      {db_path}')
+    print(f'Case-Ordner:    {case_dir}')
 
-    # Events aus DB lesen
+    # JSONL im Case-Ordner speichern
+    jsonl_path = case_dir / 'events_upload.jsonl'
+    timeline_name = f'DFIR_{case_dir.name}'
+
     print('Lese Events aus DuckDB...')
     limit = 50000
     with EventStore(db_path) as store:
@@ -64,159 +83,68 @@ def main():
         print(f'{total:,} Events in DB')
         if total > limit:
             print(f'Lade erste {limit:,} Events...')
-
-        tmp_jsonl = script_dir / 'events_upload.jsonl'
-        with open(tmp_jsonl, 'w') as f:
+        with open(jsonl_path, 'w') as f:
             for i, e in enumerate(store.iter_events()):
                 if i >= limit:
                     break
-                row = {
+                f.write(json.dumps({
                     'datetime':       e.timestamp.isoformat(),
                     'timestamp_desc': e.event_type or 'generic',
                     'message':        e.message,
                     'source':         e.source,
-                }
-                f.write(json.dumps(row) + '\n')
+                }) + '\n')
 
-    print(f'{min(total, limit):,} Events als JSONL gespeichert')
+    print(f'{min(total, limit):,} Events gespeichert → {jsonl_path}')
 
-    # Zu Timesketch hochladen
+    # Verbindung zu Timesketch
     print(f'\nVerbinde mit Timesketch: {host}...')
-    timeline_name = f'DFIR_{case_dir.name}'
-
     try:
         from timesketch_api_client import client as ts_client
         cli = ts_client.TimesketchApi(host, user, passwd)
         sk  = cli.get_sketch(sketch)
-
-        # Zeige verfügbare Upload-Methoden
-        upload_methods = [m for m in dir(sk) if any(
-            kw in m.lower() for kw in ['timeline', 'upload', 'add', 'import']
-        )]
-        print(f'Verfügbare Methoden: {upload_methods}')
-
-        uploaded = False
-
         session = cli.session
-        print(f'Session-Cookies: {list(session.cookies.keys())}')
 
-        # CSRF-Token aus HTML extrahieren (Flask-WTF)
-        import re
+        # CSRF-Token aus HTML holen
         csrf = ''
-        for url in [f'{host}/sketch/{sketch}/', f'{host}/', f'{host}/login/']:
+        for url in [f'{host}/sketch/{sketch}/', f'{host}/']:
             r = session.get(url)
-            # Suche CSRF-Token in HTML (verschiedene Formate)
             for pattern in [
                 r'csrf_token.*?value="([^"]+)"',
                 r'<meta name="csrf-token" content="([^"]+)"',
                 r'"csrfToken":\s*"([^"]+)"',
-                r'csrf[_-]token["\s:=]+([A-Za-z0-9_\-\.]+)',
             ]:
                 m = re.search(pattern, r.text, re.IGNORECASE)
                 if m:
                     csrf = m.group(1)
-                    print(f'CSRF gefunden in {url}: {csrf[:20]}...')
                     break
             if csrf:
                 break
-        print(f'CSRF Token vorhanden: {bool(csrf)}')
 
-        # Methode 1: Upload mit CSRF aus HTML
+        uploaded = False
+
         if csrf:
-            try:
-                print('Verwende Session + CSRF-Token aus HTML...')
-                with open(tmp_jsonl, 'rb') as f:
-                    resp = session.post(
-                        f'{host}/api/v1/upload/',
-                        headers={
-                            'X-CSRFToken': csrf,
-                            'Referer': f'{host}/',
-                        },
-                        files={'file': (f'{timeline_name}.jsonl', f, 'application/jsonlines')},
-                        data={'name': timeline_name, 'sketch_id': str(sketch)},
-                    )
-                print(f'Upload → Status {resp.status_code}')
-                if resp.status_code in (200, 201):
-                    uploaded = True
-                    print('Upload erfolgreich!')
-                else:
-                    print(f'Antwort: {resp.text[:300]}')
-            except Exception as e:
-                print(f'Upload fehlgeschlagen: {e}')
-
-        # Methode 2: timesketch_import_client Python API
-        if not uploaded:
-            try:
-                from timesketch_import_client import importer
-                print('Verwende ImportStreamer...')
-                with importer.ImportStreamer() as streamer:
-                    streamer.set_sketch(sk)
-                    streamer.set_timeline_name(timeline_name)
-                    streamer.add_file(str(tmp_jsonl))
-                uploaded = True
-                print('Upload via ImportStreamer erfolgreich')
-            except ImportError:
-                print('timesketch_import_client nicht installiert')
-            except Exception as e:
-                print(f'ImportStreamer fehlgeschlagen: {e}')
-
-        # Methode 2: REST API mit korrektem Login
-        if not uploaded:
-            print('Verwende REST API...')
-            import requests
-            session = requests.Session()
-
-            # Login-Seite aufrufen für CSRF-Token
-            r = session.get(f'{host}/login/')
-            csrf = session.cookies.get('csrftoken', '')
-            print(f'CSRF Token: {csrf[:20]}...' if csrf else 'Kein CSRF Token')
-
-            # Einloggen
-            r = session.post(
-                f'{host}/login/',
-                data={
-                    'username': user,
-                    'password': passwd,
-                    'csrfmiddlewaretoken': csrf,
-                },
-                headers={
-                    'Referer': f'{host}/login/',
-                    'X-CSRFToken': csrf,
-                }
-            )
-            print(f'Login Status: {r.status_code}')
-
-            # Neuen CSRF-Token nach Login holen
-            csrf = session.cookies.get('csrftoken', csrf)
-
-            # Timeline erstellen via REST
-            with open(tmp_jsonl, 'rb') as f:
+            with open(jsonl_path, 'rb') as f:
                 resp = session.post(
-                    f'{host}/api/v1/sketches/{sketch}/timelines/',
-                    headers={
-                        'X-CSRFToken': csrf,
-                        'Referer': f'{host}/',
-                    },
+                    f'{host}/api/v1/upload/',
+                    headers={'X-CSRFToken': csrf, 'Referer': f'{host}/'},
                     files={'file': (f'{timeline_name}.jsonl', f, 'application/jsonlines')},
-                    data={'name': timeline_name},
+                    data={'name': timeline_name, 'sketch_id': str(sketch)},
                 )
-            print(f'Upload Status: {resp.status_code}')
             if resp.status_code in (200, 201):
                 uploaded = True
-                print('Upload via REST API erfolgreich')
-            else:
-                print(f'REST Fehler: {resp.text[:300]}')
+                print('Upload erfolgreich!')
 
         if not uploaded:
-            print(f'\nJSONL-Datei gespeichert: {tmp_jsonl}')
-            print('\nFühre diese Befehle aus um den Upload im Container durchzuführen:')
-            print(f'  sudo docker cp {tmp_jsonl} timesketch-web:/tmp/events_upload.jsonl')
+            print('\n── Upload über Docker-Container ──────────────────────')
+            print('Führe diese 3 Befehle nacheinander aus:\n')
+            print(f'  sudo docker cp {jsonl_path} timesketch-web:/tmp/events_upload.jsonl')
+            print(f'  sudo docker cp {script_dir}/upload_inside_container.py timesketch-web:/tmp/upload_inside_container.py')
             print(f'  sudo docker exec timesketch-web python3 /tmp/upload_inside_container.py')
-            print(f'  sudo docker cp ~/dfir-pipeline/upload_inside_container.py timesketch-web:/tmp/upload_inside_container.py')
+            print()
             sys.exit(1)
 
         url = f'{host}/sketch/{sketch}/explore'
-        print(f'\nErfolgreich! Timesketch URL: {url}')
+        print(f'Timesketch URL: {url}')
         (case_dir / 'timesketch_link.txt').write_text(
             f'Timesketch URL: {url}\nErstellt: {datetime.utcnow().isoformat()}Z\n'
         )
