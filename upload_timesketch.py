@@ -97,16 +97,34 @@ def main():
 
         uploaded = False
 
-        # Methode 1: sketch.upload() — neueste API
+        # Methode 1: timesketch_importer CLI (offiziell empfohlen)
         try:
-            print('Verwende sketch.upload()...')
-            sk.upload(timeline_name, str(tmp_jsonl))
-            uploaded = True
-            print('Upload via sketch.upload() erfolgreich')
+            import subprocess
+            print('Verwende timesketch_importer CLI...')
+            result = subprocess.run(
+                [
+                    'timesketch_importer',
+                    '--host', host,
+                    '--username', user,
+                    '--password', passwd,
+                    '--sketch_id', str(sketch),
+                    '--timeline_name', timeline_name,
+                    str(tmp_jsonl),
+                ],
+                capture_output=True, text=True, timeout=300
+            )
+            print(result.stdout)
+            if result.returncode == 0:
+                uploaded = True
+                print('Upload via CLI erfolgreich')
+            else:
+                print(f'CLI Fehler: {result.stderr[:300]}')
+        except FileNotFoundError:
+            print('timesketch_importer CLI nicht gefunden')
         except Exception as e:
-            print(f'sketch.upload() fehlgeschlagen: {e}')
+            print(f'CLI fehlgeschlagen: {e}')
 
-        # Methode 2: timesketch_import_client
+        # Methode 2: timesketch_import_client Python API
         if not uploaded:
             try:
                 from timesketch_import_client import importer
