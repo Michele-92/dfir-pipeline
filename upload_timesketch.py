@@ -97,18 +97,26 @@ def main():
 
         uploaded = False
 
-        # Methode 1: Authentifizierte Session des API-Clients direkt nutzen
+        # Methode 1: Authentifizierte Session + CSRF-Token explizit holen
         try:
             print('Verwende authentifizierte API-Session...')
             session = cli.session
-            csrf = session.cookies.get('csrftoken', '')
-            print(f'CSRF Token vorhanden: {bool(csrf)}')
 
-            # Versuche verschiedene Upload-Endpunkte
-            for endpoint in ['/api/v1/upload/', '/api/v1/files/', '/api/v1/upload']:
+            # CSRF-Token über GET-Request holen
+            session.get(f'{host}/')
+            csrf = session.cookies.get('csrftoken', '')
+            print(f'CSRF Token nach GET: {bool(csrf)}')
+
+            if not csrf:
+                # Zweiter Versuch über Login-Seite
+                session.get(f'{host}/login/')
+                csrf = session.cookies.get('csrftoken', '')
+                print(f'CSRF Token nach /login/ GET: {bool(csrf)}')
+
+            if csrf:
                 with open(tmp_jsonl, 'rb') as f:
                     resp = session.post(
-                        f'{host}{endpoint}',
+                        f'{host}/api/v1/upload/',
                         headers={
                             'X-CSRFToken': csrf,
                             'Referer': f'{host}/',
@@ -116,13 +124,14 @@ def main():
                         files={'file': (f'{timeline_name}.jsonl', f, 'application/jsonlines')},
                         data={'name': timeline_name, 'sketch_id': str(sketch)},
                     )
-                print(f'  {endpoint} → Status {resp.status_code}')
+                print(f'Upload → Status {resp.status_code}')
                 if resp.status_code in (200, 201):
                     uploaded = True
-                    print(f'Upload via {endpoint} erfolgreich')
-                    break
-                elif resp.status_code != 404:
-                    print(f'  Antwort: {resp.text[:200]}')
+                    print('Upload via API-Session erfolgreich')
+                else:
+                    print(f'Antwort: {resp.text[:300]}')
+            else:
+                print('Kein CSRF Token erhältlich')
         except Exception as e:
             print(f'API-Session Upload fehlgeschlagen: {e}')
 
