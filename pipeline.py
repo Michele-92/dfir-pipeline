@@ -14,19 +14,19 @@ from utils.logger import get_logger
 from stages import (
     stage01_detection,
     stage02_memory,
-    stage02_5_profiling,
-    stage03_logs,
-    stage04_disk,
-    stage04_1_autopsy,
-    stage04_5_ioc,
-    stage05_tsk,
-    stage06_normalize,
-    stage07_antiforensics,
-    stage08_ml,
-    stage09_mitre,
-    stage10_ai,
-    stage11_quality,
-    stage12_export,
+    stage03_profiling,
+    stage04_logs,
+    stage05_disk,
+    stage05_1_autopsy,
+    stage06_ioc,
+    stage07_tsk,
+    stage08_normalize,
+    stage09_antiforensics,
+    stage10_ml,
+    stage11_mitre,
+    stage12_aggregation,
+    stage13_quality,
+    stage14_export,
 )
 
 log = get_logger('pipeline')
@@ -66,7 +66,7 @@ def main():
     parser.add_argument('--no-timesketch', action='store_true', help='Timesketch-Upload deaktivieren')
     parser.add_argument('--debug',         action='store_true', help='Debug-Logging aktivieren')
     parser.add_argument('--workers',       type=int, default=2,
-                        help='Anzahl paralleler Worker für Stage 3 + Stage 5 (Standard: 2)')
+                        help='Anzahl paralleler Worker für Stage 6 + Stage 5 (Standard: 2)')
     args = parser.parse_args()
 
     if args.debug:
@@ -94,23 +94,23 @@ def main():
     # ── Pipeline ausführen ────────────────────────────────────────────────────
     ctx = run_stage(stage01_detection.run,      ctx, 'stage_01')
     ctx = run_stage(stage02_memory.run,         ctx, 'stage_02')
-    ctx = run_stage(stage02_5_profiling.run,    ctx, 'stage_02_5')
-    ctx = run_stage(stage04_disk.run,           ctx, 'stage_04')
-    ctx = run_stage(stage04_1_autopsy.run,      ctx, 'stage_04_1',
+    ctx = run_stage(stage03_profiling.run,      ctx, 'stage_03')
+    ctx = run_stage(stage05_disk.run,           ctx, 'stage_05')
+    ctx = run_stage(stage05_1_autopsy.run,      ctx, 'stage_05_1',
                     force=args.force_autopsy, skip=args.no_autopsy)
-    ctx = run_stage(stage05_tsk.run,            ctx, 'stage_05')
-    ctx = run_stage(stage03_logs.run,           ctx, 'stage_03')
-    ctx = run_stage(stage04_5_ioc.run,          ctx, 'stage_04_5')
-    ctx = run_stage(stage06_normalize.run,      ctx, 'stage_06')
-    ctx = run_stage(stage07_antiforensics.run,  ctx, 'stage_07')
-    ctx = run_stage(stage08_ml.run,             ctx, 'stage_08')
-    ctx = run_stage(stage09_mitre.run,          ctx, 'stage_09')
-    ctx = run_stage(stage10_ai.run,             ctx, 'stage_10')
-    ctx = run_stage(stage11_quality.run,        ctx, 'stage_11')
-    ctx = run_stage(stage12_export.run,         ctx, 'stage_12')
+    ctx = run_stage(stage07_tsk.run,            ctx, 'stage_07')
+    ctx = run_stage(stage04_logs.run,           ctx, 'stage_04')
+    ctx = run_stage(stage06_ioc.run,            ctx, 'stage_06')
+    ctx = run_stage(stage08_normalize.run,      ctx, 'stage_08')
+    ctx = run_stage(stage09_antiforensics.run,  ctx, 'stage_09')
+    ctx = run_stage(stage10_ml.run,             ctx, 'stage_10')
+    ctx = run_stage(stage11_mitre.run,          ctx, 'stage_11')
+    ctx = run_stage(stage12_aggregation.run,    ctx, 'stage_12')
+    ctx = run_stage(stage13_quality.run,        ctx, 'stage_13')
+    ctx = run_stage(stage14_export.run,         ctx, 'stage_14')
 
     # ── Ergebnis ausgeben ────────────────────────────────────────────────────
-    from stages.stage11_quality import evaluate_quality
+    from stages.stage13_quality import evaluate_quality
     quality = evaluate_quality(ctx)
 
     log.info('=' * 60)

@@ -7,7 +7,7 @@ log = logging.getLogger(__name__)
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 6: Datennormalisierung — alle Timestamps → UTC')
+    log.info('Stage 8: Datennormalisierung — alle Timestamps → UTC')
 
     tz = ctx.timezone
 
@@ -28,5 +28,5 @@ def run(ctx: PipelineContext) -> PipelineContext:
     log.info(f'  {count:,} Events normalisiert und sortiert (UTC)')
 
     if ctx.coc:
-        ctx.coc.add_entry('stage_06', f'Normalisierung: {count} Events → UTC')
+        ctx.coc.add_entry('stage_08', f'Normalisierung: {count} Events → UTC')
     return ctx

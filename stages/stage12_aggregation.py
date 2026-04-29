@@ -5,11 +5,11 @@ log = logging.getLogger(__name__)
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 10: KI-Anreicherung')
+    log.info('Stage 12: Ergebnis-Aggregation')
     ctx.enriched_summary = _build_summary(ctx)
     log.info('  Zusammenfassung erstellt')
     if ctx.coc:
-        ctx.coc.add_entry('stage_10', 'KI-Zusammenfassung erstellt')
+        ctx.coc.add_entry('stage_12', 'Ergebnis-Aggregation abgeschlossen')
     return ctx
 
 

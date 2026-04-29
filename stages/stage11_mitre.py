@@ -103,7 +103,7 @@ KEYWORD_MAP = {
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 9: MITRE ATT&CK Mapping')
+    log.info('Stage 11: MITRE ATT&CK Mapping')
     techniques = _load_attack_db()
     hits       = _map_events(ctx.normalized_events, techniques)
     hits      += _map_antiforensics(ctx.antiforensics_hits, techniques)
@@ -112,7 +112,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
     ctx.mitre_hits = hits
     log.info(f'  {len(hits)} MITRE ATT&CK Techniken gefunden')
     if ctx.coc:
-        ctx.coc.add_entry('stage_09', f'MITRE: {len(hits)} Techniken')
+        ctx.coc.add_entry('stage_11', f'MITRE: {len(hits)} Techniken')
     return ctx
 
 

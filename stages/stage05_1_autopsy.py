@@ -11,13 +11,13 @@ log = logging.getLogger(__name__)
 def run(ctx: PipelineContext, force: bool = False, skip: bool = False) -> PipelineContext:
     should_run, reason = should_run_autopsy(ctx, force, skip)
     ctx.autopsy_reason = reason
-    log.info(f'Stage 4.1: Autopsy — {reason}')
+    log.info(f'Stage 5.1: Autopsy — {reason}')
 
     if not should_run:
         ctx.autopsy_ran = False
-        ctx.stage_status['stage_04_1'] = f'ÜBERSPRUNGEN — {reason}'
+        ctx.stage_status['stage_05_1'] = f'ÜBERSPRUNGEN — {reason}'
         if ctx.coc:
-            ctx.coc.add_entry('stage_04_1', f'Autopsy übersprungen: {reason}')
+            ctx.coc.add_entry('stage_05_1', f'Autopsy übersprungen: {reason}')
         return ctx
 
     case_dir = ctx.case_dir / 'raw' / 'autopsy_artefakte' if ctx.case_dir else Path('/tmp/autopsy_case')
@@ -31,11 +31,11 @@ def run(ctx: PipelineContext, force: bool = False, skip: bool = False) -> Pipeli
         ctx.autopsy_ran     = True
         log.info(f'  Autopsy abgeschlossen: {len(ctx.autopsy_results)} Ergebnisse')
         if ctx.coc:
-            ctx.coc.add_entry('stage_04_1', 'Autopsy erfolgreich abgeschlossen')
+            ctx.coc.add_entry('stage_05_1', 'Autopsy erfolgreich abgeschlossen')
     except Exception as e:
         log.error(f'  Autopsy Fehler: {e}')
         ctx.autopsy_ran = False
-        ctx.stage_errors['stage_04_1'] = str(e)
+        ctx.stage_errors['stage_05_1'] = str(e)
 
     return ctx
 
@@ -47,14 +47,14 @@ def should_run_autopsy(ctx: PipelineContext, force: bool = False,
     if force:
         return True, 'Manuell erzwungen (--force-autopsy)'
     if ctx.image_count > 100:
-        return True, f'Bedingung 4.1.1: {ctx.image_count} Bilddateien gefunden'
+        return True, f'Bedingung 5.1.1: {ctx.image_count} Bilddateien gefunden'
     if ctx.email_db_found:
-        return True, 'Bedingung 4.1.2: E-Mail-Datenbank gefunden (PST/OST/MBOX)'
+        return True, 'Bedingung 5.1.2: E-Mail-Datenbank gefunden (PST/OST/MBOX)'
     if ctx.encrypted_count > 0:
-        return True, f'Bedingung 4.1.3: {ctx.encrypted_count} verschlüsselte Dateien'
+        return True, f'Bedingung 5.1.3: {ctx.encrypted_count} verschlüsselte Dateien'
     if ctx.unknown_ext_count > 50:
-        return True, f'Bedingung 4.1.4: {ctx.unknown_ext_count} unbekannte Dateitypen'
-    return False, 'Bedingung 4.1.5: Keine Bedingung erfüllt — Autopsy übersprungen'
+        return True, f'Bedingung 5.1.4: {ctx.unknown_ext_count} unbekannte Dateitypen'
+    return False, 'Bedingung 5.1.5: Keine Bedingung erfüllt — Autopsy übersprungen'
 
 
 def _run_autopsy(image_path: Path, case_dir: Path, report_dir: Path) -> None:

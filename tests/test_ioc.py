@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from models.event import ForensicEvent
 from models.pipeline_context import PipelineContext
-from stages.stage04_5_ioc import run, _collect_texts
+from stages.stage06_ioc import run, _collect_texts
 
 
 def _ctx_with_events(messages):

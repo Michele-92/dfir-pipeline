@@ -5,7 +5,7 @@ log = logging.getLogger(__name__)
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 11: Qualitätsprüfung')
+    log.info('Stage 13: Qualitätsprüfung')
     quality = evaluate_quality(ctx)
     ctx.stage_status['quality'] = quality
     log.info(f'  Gesamtqualität: {quality}')
@@ -18,7 +18,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
         log.info(f'  Status [{stage}]: {status}')
 
     if ctx.coc:
-        ctx.coc.add_entry('stage_11', f'Qualität: {quality}, Fehler: {len(ctx.stage_errors)}')
+        ctx.coc.add_entry('stage_13', f'Qualität: {quality}, Fehler: {len(ctx.stage_errors)}')
     return ctx
 
 

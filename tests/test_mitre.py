@@ -6,7 +6,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from models.event import ForensicEvent
-from stages.stage09_mitre import _map_events, _deduplicate, KEYWORD_MAP
+from stages.stage11_mitre import _map_events, _deduplicate, KEYWORD_MAP
 
 
 def _make_event(msg, source='syslog', severity='info'):

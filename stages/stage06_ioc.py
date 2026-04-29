@@ -36,7 +36,7 @@ EXTRACTORS = [
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 4.5: IOC-Extraktion')
+    log.info('Stage 6: IOC-Extraktion')
     iocs: List[IOC] = []
     seen = set()
 
@@ -68,7 +68,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
     log.info(f'  {len(iocs)} IOCs extrahiert (Qualität: {ctx.ioc_quality})')
     if ctx.coc:
-        ctx.coc.add_entry('stage_04_5', f'IOC-Extraktion: {len(iocs)} IOCs')
+        ctx.coc.add_entry('stage_06', f'IOC-Extraktion: {len(iocs)} IOCs')
     return ctx
 
 

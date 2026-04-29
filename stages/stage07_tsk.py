@@ -22,11 +22,11 @@ LOG_KEYWORDS = [
 
 def run(ctx: PipelineContext) -> PipelineContext:
     if not ctx.dissect_empty:
-        log.info('Stage 5: TSK Fallback — nicht nötig (Dissect hat Daten)')
-        ctx.stage_status['stage_05'] = 'ÜBERSPRUNGEN — Dissect erfolgreich'
+        log.info('Stage 7: TSK Fallback — nicht nötig (Dissect hat Daten)')
+        ctx.stage_status['stage_07'] = 'ÜBERSPRUNGEN — Dissect erfolgreich'
         return ctx
 
-    log.info('Stage 5: TSK Fallback aktiv')
+    log.info('Stage 7: TSK Fallback aktiv')
     ctx.tsk_fallback_used = True
     ctx.ioc_quality       = 'MITTEL'
     results               = {}
@@ -62,7 +62,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
     log.info(f'  TSK: {sum(len(v) for v in results.values())} Einträge')
     if ctx.coc:
-        ctx.coc.add_entry('stage_05', f'TSK Fallback: {len(results)} Partitionen analysiert')
+        ctx.coc.add_entry('stage_07', f'TSK Fallback: {len(results)} Partitionen analysiert')
     return ctx
 
 

@@ -37,12 +37,13 @@ class PipelineContext:
     # ── Performance ───────────────────────────────────────
     workers:            int                 = 2
 
-    # ── Stage 3: Log-Parsing ──────────────────────────────
+    # ── Stage 6: Log-Parsing ──────────────────────────────
     events:             List[ForensicEvent] = field(default_factory=list)
     events_db_path:     Optional[Path]      = None
     parser_stats:       Dict[str, int]      = field(default_factory=dict)
     total_log_lines:    int = 0
     parsed_events:      int = 0
+    hayabusa_hits:      int = 0
 
     # ── Stage 4: Disk ─────────────────────────────────────
     disk_artifacts:     Dict[str, Any] = field(default_factory=dict)

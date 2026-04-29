@@ -19,7 +19,7 @@ SECURE_DELETE_TOOLS   = ['shred', 'srm', 'wipe', 'bleachbit', 'dd if=/dev/zero',
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 7: Anti-Forensics-Erkennung')
+    log.info('Stage 9: Anti-Forensics-Erkennung')
     hits: List[Dict] = []
 
     hits += _check_timestomping(ctx)
@@ -31,7 +31,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
     ctx.antiforensics_hits = hits
     log.info(f'  {len(hits)} Anti-Forensics-Treffer gefunden')
     if ctx.coc:
-        ctx.coc.add_entry('stage_07', f'Anti-Forensics: {len(hits)} Treffer')
+        ctx.coc.add_entry('stage_09', f'Anti-Forensics: {len(hits)} Treffer')
     return ctx
 
 

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from models.pipeline_context import PipelineContext
-from stages.stage11_quality import evaluate_quality
+from stages.stage13_quality import evaluate_quality
 
 log = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ C_YELLOW_L   = (0xFF/255, 0xEB/255, 0x9C/255)
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 12: Export & Archivierung')
+    log.info('Stage 14: Export & Archivierung')
     case_dir = ctx.case_dir
     if not case_dir:
         log.error('Kein Case-Verzeichnis — Export übersprungen')
@@ -41,7 +41,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
     log.info(f'  Export abgeschlossen → {case_dir}')
     if ctx.coc:
-        ctx.coc.add_entry('stage_12', 'Export abgeschlossen')
+        ctx.coc.add_entry('stage_14', 'Export abgeschlossen')
     return ctx
 
 
@@ -435,10 +435,41 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     # ── Seite 9: Parser-Statistik ────────────────────────────────────────────
     story.append(_h1('Parser-Statistik'))
     story.append(_spacer(3))
-    story.append(_body('Übersicht aller 38 Parser — welche aktiv waren und wie viele '
-                       'Events sie extrahiert haben.'))
+    story.append(_body('Übersicht aller 38 Parser + Hayabusa (Stage 3.3) — '
+                       'welche aktiv waren und wie viele Events sie extrahiert haben.'))
     story.append(_spacer(4))
 
+    # ── Hayabusa Info-Box ─────────────────────────────────────────────────────
+    hayabusa_status = ctx.stage_status.get('stage_03_3', 'UNBEKANNT — Stage 3.3 nicht ausgeführt')
+    hayabusa_hits   = ctx.hayabusa_hits
+
+    if hayabusa_hits > 0:
+        haya_bg    = C_GREEN_L
+        haya_border = C_GREEN
+        haya_label  = f'Hayabusa (Stage 3.3): AKTIV — {hayabusa_hits} Sigma-Treffer'
+    else:
+        haya_bg    = C_YELLOW_L
+        haya_border = C_ORANGE
+        haya_label  = f'Hayabusa (Stage 3.3): INFORMATION — {hayabusa_status}'
+
+    haya_box = Table(
+        [[Paragraph(
+            f'<font size="9"><b>{haya_label}</b></font>',
+            _normal_style()
+        )]],
+        colWidths=[W]
+    )
+    haya_box.setStyle(TableStyle([
+        ('BACKGROUND',    (0, 0), (-1, -1), _rl_color_from_tuple(haya_bg)),
+        ('BOX',           (0, 0), (-1, -1), 1.5, _rl_color_from_tuple(haya_border)),
+        ('TOPPADDING',    (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 10),
+    ]))
+    story.append(haya_box)
+    story.append(_spacer(5))
+
+    # ── Parser-Tabelle ────────────────────────────────────────────────────────
     parser_counts = ctx.parser_stats
 
     all_parsers = [
@@ -450,16 +481,23 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
         'bash_history','zsh_history','fish_history','utmp',
         'ssh','postfix','ftp','samba','openvpn',
         'docker','containerd','iis','evtx','plaso_fallback',
+        'hayabusa',
     ]
-    rows = [['Parser', 'Log-Datei', 'Events', 'Status']]
+    rows = [['Parser', 'Log-Datei / Quelle', 'Events', 'Status']]
     for name in all_parsers:
-        count  = parser_counts.get(name, 0)
-        status = 'Aktiv' if count > 0 else 'Nicht vorhanden'
-        if name == 'plaso_fallback' and count > 0:
+        count = parser_counts.get(name, 0)
+        if name == 'hayabusa':
+            source = 'EVTX (Sigma-Rules)'
+            status = f'Aktiv — {count} Sigma-Treffer' if count > 0 else 'Übersprungen — keine EVTX-Dateien'
+        elif name == 'plaso_fallback' and count > 0:
+            source = f'{name}.log'
             status = 'Fallback aktiv'
-        rows.append([name, f'{name}.log', str(count), status])
+        else:
+            source = f'{name}.log'
+            status = 'Aktiv' if count > 0 else 'Nicht vorhanden'
+        rows.append([name, source, str(count), status])
 
-    story.append(_table(rows, [40*mm, 50*mm, 20*mm, 60*mm]))
+    story.append(_table(rows, [38*mm, 52*mm, 20*mm, 60*mm]))
     story.append(PageBreak())
 
     # ── Seite 10: YARA-Treffer & Erweiterte IOCs ─────────────────────────────

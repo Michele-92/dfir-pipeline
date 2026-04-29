@@ -18,7 +18,7 @@ ENCRYPTED_MAGIC  = [b'ENCRYPTED', b'\x7fELF\x02', b'PK\x03\x04']
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 4: Dissect + Zimmerman Tools')
+    log.info('Stage 5: Dissect')
     artifacts = {}
     out_dir = ctx.case_dir / 'raw' / 'disk_artefakte' if ctx.case_dir else Path('/tmp/dfir_disk')
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -52,7 +52,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
         log.warning('  Dissect leer — TSK Fallback wird aktiviert')
 
     if ctx.coc:
-        ctx.coc.add_entry('stage_04', f'Dissect: {total} Artefakte')
+        ctx.coc.add_entry('stage_05', f'Dissect: {total} Artefakte')
     return ctx
 
 

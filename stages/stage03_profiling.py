@@ -47,7 +47,7 @@ OS_PROFILES = {
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 2.5: System-Profiling')
+    log.info('Stage 3: System-Profiling')
     os_release = _read_os_release(ctx.disk_image_path)
 
     for family, profile in OS_PROFILES.items():
@@ -67,7 +67,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
     log.info(f'  OS: {ctx.os_name} ({ctx.os_family}), Kernel: {ctx.kernel_version}')
     log.info(f'  Hostname: {ctx.hostname}, TZ: {ctx.timezone}')
     if ctx.coc:
-        ctx.coc.add_entry('stage_02_5', f'Profiling: {ctx.os_name}')
+        ctx.coc.add_entry('stage_03', f'Profiling: {ctx.os_name}')
     return ctx
 
 

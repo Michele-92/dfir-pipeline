@@ -129,21 +129,21 @@ dfir_pipeline/
 │
 ├── stages/                        ← Eine Datei pro Pipeline-Stufe
 │   ├── __init__.py
-│   ├── stage01_detection.py       ← Dateierkennung + Hash
-│   ├── stage02_memory.py          ← UAC + Volatility 3
-│   ├── stage02_5_profiling.py     ← System-Profiling
-│   ├── stage03_logs.py            ← Log-Parsing + Parser-Router (Kapitel 13)
-│   ├── stage04_disk.py            ← Dissect + Zimmerman
-│   ├── stage04_1_autopsy.py       ← Autopsy (konditionell)
-│   ├── stage04_5_ioc.py           ← IOC-Extraktion
-│   ├── stage05_tsk.py             ← TSK Fallback
-│   ├── stage06_normalize.py       ← Datennormalisierung
-│   ├── stage07_antiforensics.py   ← Anti-Forensics + YARA (Kapitel 12)
-│   ├── stage08_ml.py              ← Isolation Forest
-│   ├── stage09_mitre.py           ← MITRE ATT&CK Mapping (Kapitel 11)
-│   ├── stage10_ai.py              ← KI-Anreicherung
-│   ├── stage11_quality.py         ← Fehler-Handling
-│   └── stage12_export.py          ← Export + Report PDF
+│   ├── stage01_detection.py       ← Stufe 1:  Dateierkennung + Hash + Chain of Custody
+│   ├── stage02_memory.py          ← Stufe 2:  RAM-Analyse (Volatility3)
+│   ├── stage03_profiling.py       ← Stufe 3:  System-Profiling (OS, Kernel, Hostname)
+│   ├── stage04_logs.py            ← Stufe 4:  Log-Parsing (38 Parser + Hayabusa Stage 4.3)
+│   ├── stage05_disk.py            ← Stufe 5:  Disk-Artefakt-Extraktion (Dissect)
+│   ├── stage05_1_autopsy.py       ← Stufe 5.1: Autopsy (konditionell, 5 Bedingungen)
+│   ├── stage06_ioc.py             ← Stufe 6:  IOC-Extraktion
+│   ├── stage07_tsk.py             ← Stufe 7:  TSK Fallback (nur wenn Dissect leer)
+│   ├── stage08_normalize.py       ← Stufe 8:  Datennormalisierung → UTC
+│   ├── stage09_antiforensics.py   ← Stufe 9:  Anti-Forensics + YARA
+│   ├── stage10_ml.py              ← Stufe 10: ML-Anomalieerkennung (Isolation Forest)
+│   ├── stage11_mitre.py           ← Stufe 11: MITRE ATT&CK Mapping (v15, 80+ Techniken)
+│   ├── stage12_aggregation.py     ← Stufe 12: Ergebnis-Aggregation
+│   ├── stage13_quality.py         ← Stufe 13: Fehler-Handling & Qualitätsbewertung
+│   └── stage14_export.py          ← Stufe 14: Export (report.pdf, CoC.pdf, Timesketch)
 │
 ├── parsers/                       ← Alle 38 Log-Parser (Kapitel 10)
 │   ├── __init__.py                ← Importiert alle Parser
@@ -291,60 +291,61 @@ class PipelineContext:
     memory_results:    Dict[str, Any] = field(default_factory=dict)
     # Enthält: processes, network, bash_history, modules, malfind
  
-    # ── Stage 2.5: System-Profiling ───────────────────────
+    # ── Stage 3: System-Profiling ────────────────────────
     os_family:         str = ''   # 'debian', 'rhel', 'arch', 'alpine'
     os_name:           str = ''   # 'Ubuntu 22.04 LTS'
     kernel_version:    str = ''   # '5.15.0-91-generic'
     hostname:          str = ''
     timezone:          str = 'UTC'
     log_paths:         Dict[str, Path] = field(default_factory=dict)
-    # log_paths wird von Stage 2.5 gesetzt und von Stage 3 genutzt
- 
-    # ── Stage 3: Log-Parsing ──────────────────────────────
+    # log_paths wird von Stage 3 gesetzt und von Stage 4 genutzt
+
+    # ── Stage 4: Log-Parsing ──────────────────────────────
     events:            List['ForensicEvent'] = field(default_factory=list)  # leer nach v3.1
     events_db_path:    Optional[Path] = None          # Pfad zur events.db (DuckDB)
     parser_stats:      Dict[str, int] = field(default_factory=dict)  # Events pro Parser
     total_log_lines:   int = 0
     parsed_events:     int = 0
- 
-    # ── Stage 4: Disk ─────────────────────────────────────
+    hayabusa_hits:     int = 0    # Treffer aus Stage 4.3 (Hayabusa EVTX-Analyse)
+
+    # ── Stage 5: Disk ─────────────────────────────────────
     disk_artifacts:    Dict[str, Any] = field(default_factory=dict)
     image_count:       int = 0
     email_db_found:    bool = False
     encrypted_count:   int = 0
     unknown_ext_count: int = 0
-    dissect_empty:     bool = False  # True = TSK Fallback nötig
- 
-    # ── Stage 4.1: Autopsy ────────────────────────────────
+    dissect_empty:     bool = False  # True = TSK Fallback (Stage 7) nötig
+
+    # ── Stage 5.1: Autopsy ────────────────────────────────
     autopsy_ran:       bool = False
     autopsy_reason:    str = ''      # Warum gestartet / übersprungen
     autopsy_results:   Dict[str, Any] = field(default_factory=dict)
- 
-    # ── Stage 4.5: IOC-Extraktion ─────────────────────────
+
+    # ── Stage 6: IOC-Extraktion ───────────────────────────
     iocs:              List['IOC'] = field(default_factory=list)
     ioc_quality:       str = 'HOCH' # 'HOCH' oder 'MITTEL' (TSK-Fallback)
- 
-    # ── Stage 5: TSK Fallback ─────────────────────────────
+
+    # ── Stage 7: TSK Fallback ─────────────────────────────
     tsk_fallback_used: bool = False
     tsk_results:       Dict[str, Any] = field(default_factory=dict)
- 
-    # ── Stage 6: Normalisierung ───────────────────────────
+
+    # ── Stage 8: Normalisierung ───────────────────────────
     normalized_events: List['ForensicEvent'] = field(default_factory=list)
- 
-    # ── Stage 7: Anti-Forensics ───────────────────────────
+
+    # ── Stage 9: Anti-Forensics ───────────────────────────
     antiforensics_hits: List[Dict] = field(default_factory=list)
- 
-    # ── Stage 8: ML ───────────────────────────────────────
+
+    # ── Stage 10: ML ──────────────────────────────────────
     anomalies:         List['ForensicEvent'] = field(default_factory=list)
     anomaly_scores:    List[float] = field(default_factory=list)
- 
-    # ── Stage 9: MITRE ────────────────────────────────────
+
+    # ── Stage 11: MITRE ───────────────────────────────────
     mitre_hits:        List[Dict] = field(default_factory=list)
- 
-    # ── Stage 10: KI ──────────────────────────────────────
+
+    # ── Stage 12: Ergebnis-Aggregation ────────────────────
     enriched_summary:  str = ''
- 
-    # ── Stage 11: Qualität ────────────────────────────────
+
+    # ── Stage 13: Qualität ────────────────────────────────
     stage_errors:      Dict[str, str] = field(default_factory=dict)
     stage_status:      Dict[str, str] = field(default_factory=dict)
  
@@ -406,29 +407,30 @@ class IOC:
  
 | Stufe | Bezeichnung | Funktion | Tools |
 | --- | --- | --- | --- |
-| 1 | Automatische Dateierkennung | Dateityp erkennen, SHA256/MD5 berechnen, Chain of Custody starten | python-magic, hashlib |
-| 2 | UAC + Volatility 3 | RAM-Dump analysieren, Live-Artefakte sammeln | UAC, Volatility 3 |
-| 2.5 | System-Profiling | Linux-Familie, Kernel, Distro, Log-Pfade bestimmen | dissect, os-release |
-| 3 | Log-Parsing (38 Parser) | Alle Log-Formate parsen, relevante Events filtern | Plaso, Hayabusa, custom |
-| 3.1 | Parser-Architektur | Format-Erkennung und automatisches Parser-Routing | python-magic, regex |
-| 3.2 | 38 Linux-Log-Parser | Syslog, auth.log, Journald, Apache, SSH, Cron, ... | custom Python Parser |
-| 4 | Dissect + Zimmerman Tools | Disk-Image Artefakte extrahieren | Dissect, Zimmerman (Wine) |
-| 4.1 | Autopsy (konditionell) | Startet nur wenn mind. eine Bedingung erfüllt ist | Autopsy Headless (Java) |
-| 4.1.1 | Bedingung 1: Bilder > 100 | EXIF, GPS-Daten, Thumbnails analysieren | Autopsy EXIF Parser |
-| 4.1.2 | Bedingung 2: E-Mail-DB gefunden | PST / OST / MBOX parsen, verdächtige E-Mails filtern | Autopsy Email Parser |
-| 4.1.3 | Bedingung 3: Verschlüsselte Dateien | Verschlüsselungs-Typ erkennen und dokumentieren | Autopsy Encryption |
-| 4.1.4 | Bedingung 4: Unbekannte Typen > 50 | Hash-Datenbank Abgleich (NSRL) | Autopsy Hash Lookup |
-| 4.1.5 | Bedingung 5: Nichts zutrifft | Autopsy wird übersprungen — spart ca. 45 Minuten | — (übersprungen) |
-| 4.5 | IOC-Extraktion | IPs, Domains, Hashes, CVEs aus allen Artefakten extrahieren | regex, yara, custom |
-| 5 | TSK Fallback | Falls Dissect leer: TSK übernimmt Dateisystem-Analyse | The Sleuth Kit |
-| 5.1 | Multi-Partition-Analyse | MBR/GPT Partitionstabellen lesen, jede Partition einzeln | TSK mmls, mmcat |
-| 6 | Datennormalisierung | Alle Timestamps → UTC, alle Felder → einheitliches Schema | pandas, dateutil |
-| 7 | Anti-Forensics-Erkennung | Timestomping, Log-Löschung, Rootkit-Indikatoren | custom, yara |
-| 8 | ML-Anomalieerkennung | Isolation Forest markiert statistische Ausreißer | scikit-learn |
-| 9 | MITRE ATT&CK Mapping | 80+ Techniken aus ATT&CK v15 automatisch mappen | attackcti, custom |
-| 10 | KI-Vorverarbeitung | Ergebnisse anreichern und zusammenfassen | custom NLP |
-| 11 | Fehler-Handling & Qualität | Alle Stufen-Fehler dokumentieren, Qualitätsbewertung | custom |
-| 12 | Export & Archivierung | report.pdf, chain_of_custody.pdf, Timesketch Upload | Timesketch API, reportlab |
+| 1 | Automatische Dateierkennung & Beweissicherung | Dateityp erkennen, SHA256/MD5 berechnen, Chain of Custody starten | python-magic, hashlib |
+| 2 | RAM-Analyse mit Volatility3 | RAM-Dump analysieren, Prozesse/Netzwerk/Module auslesen | Volatility3 |
+| 3 | System-Profiling | Linux-Familie, Kernel, Hostname, Log-Pfade bestimmen | dissect (target-query), os-release |
+| 4 | Log-Parsing (38 Parser) | Alle Log-Formate parsen, Events in DuckDB speichern | custom Parser, Plaso (Fallback) |
+| 4.1 | Parser-Architektur & automatisches Routing | Format-Erkennung, automatisches Parser-Routing | regex, can_parse() |
+| 4.2 | 38 Linux-Log-Parser | Syslog, auth.log, Journald, Apache, SSH, Cron, ... | custom Python Parser |
+| 4.3 | Hayabusa EVTX-Analyse (konditionell) | Sigma-Rule-basierte Analyse von Windows EVTX-Logs | Hayabusa, Sigma-Rules |
+| 5 | Disk-Artefakt-Extraktion mit Dissect | MFT, Registry, Prefetch, Browser, SSH aus Disk-Image | Dissect (target-query) |
+| 5.1 | Autopsy (konditionell) | Startet nur wenn mind. eine Bedingung erfüllt ist | Autopsy Headless (Java) |
+| 5.1.1 | Bedingung 1: Bilddateien > 100 | EXIF, GPS-Daten, Thumbnails analysieren | Autopsy EXIF Parser |
+| 5.1.2 | Bedingung 2: E-Mail-Datenbank gefunden | PST / OST / MBOX parsen, verdächtige E-Mails filtern | Autopsy Email Parser |
+| 5.1.3 | Bedingung 3: Verschlüsselte Dateien | Verschlüsselungs-Typ erkennen und dokumentieren | Autopsy Encryption |
+| 5.1.4 | Bedingung 4: Unbekannte Dateitypen > 50 | Hash-Datenbank Abgleich (NSRL) | Autopsy Hash Lookup |
+| 5.1.5 | Bedingung 5: Keine Bedingung erfüllt | Autopsy wird übersprungen — spart ca. 45 Minuten | — (übersprungen) |
+| 6 | IOC-Extraktion | IPs, Domains, Hashes, CVEs, Registry-Keys extrahieren | regex, yara-python |
+| 7 | TSK Fallback (konditionell) | Falls Dissect leer: TSK übernimmt Dateisystem-Analyse | The Sleuth Kit |
+| 7.1 | Multi-Partition-Analyse | MBR/GPT Partitionstabellen lesen, jede Partition einzeln | TSK mmls, fls, icat |
+| 8 | Datennormalisierung | Alle Timestamps → UTC, einheitliches Schema | DuckDB, dateutil |
+| 9 | Anti-Forensics-Erkennung | Timestomping, Log-Wiping, Rootkit-Indikatoren, YARA | custom, yara-python |
+| 10 | ML-basierte Anomalieerkennung | Isolation Forest markiert statistische Ausreißer | scikit-learn, numpy |
+| 11 | MITRE ATT&CK Mapping | 80+ Techniken aus ATT&CK v15 automatisch mappen | custom (enterprise-attack-v15.json) |
+| 12 | Ergebnis-Aggregation | Alle Ergebnisse regelbasiert zusammenfassen | custom |
+| 13 | Fehler-Handling & Qualitätsbewertung | Alle Stufen-Fehler dokumentieren, Qualitätsbewertung | custom |
+| 14 | Export & Archivierung | report.pdf, chain_of_custody.pdf, Timesketch Upload | reportlab, Timesketch API |
  
  
  
@@ -442,7 +444,7 @@ class IOC:
 ---
  
  
-## Stufe 1 — Automatische Dateierkennung
+## Stufe 1 — Automatische Dateierkennung & Beweissicherung
  
  
 > **Aufgabe dieser Stufe**
@@ -536,7 +538,7 @@ def create_case_dir(output_dir: Path) -> Path:
 ```
  
  
-## Stufe 2 — UAC + Volatility 3 (RAM-Analyse)
+## Stufe 2 — RAM-Analyse mit Volatility3
  
  
 > **Aufgabe dieser Stufe**
@@ -572,7 +574,7 @@ def create_case_dir(output_dir: Path) -> Path:
 ### Fehlerverhalten:
  
  
-## Stufe 2.5 — System-Profiling
+## Stufe 3 — System-Profiling
  
  
 > **Warum diese Stufe so früh?**
@@ -602,7 +604,7 @@ def create_case_dir(output_dir: Path) -> Path:
  
  
 ```
-# stages/stage02_5_profiling.py
+# stages/stage03_profiling.py
 def detect_os_family(ctx: PipelineContext) -> PipelineContext:
     # Dissect wird genutzt um /etc/os-release aus dem Image zu lesen
     # OHNE das Image zu mounten
@@ -628,13 +630,13 @@ def detect_os_family(ctx: PipelineContext) -> PipelineContext:
 ```
  
  
-## Stufe 3 — Log-Parsing (38 Parser)
+## Stufe 4 — Log-Parsing (38 Parser)
  
  
 > **Aufgabe dieser Stufe**
  
 >
-> stage03_logs.py ist der Manager — er koordiniert alle 38 Parser
+> stage04_logs.py ist der Manager — er koordiniert alle 38 Parser
 >
 > Für jede Log-Datei im Image wird genau EIN Parser aufgerufen (kein Überschneiden)
 >
@@ -651,7 +653,7 @@ def detect_os_family(ctx: PipelineContext) -> PipelineContext:
 > **Wie der Parser-Router funktioniert**
  
 >
-> 1. stage03_logs.py findet alle Log-Dateien im Image
+> 1. stage04_logs.py findet alle Log-Dateien im Image
 >
 > 2. Für jede Datei: Parser-Router fragt alle 38 Parser der Reihe nach
 >
@@ -741,7 +743,7 @@ class BaseParser(ABC):
 | PlasaFallbackParser | alle unbekannten Formate | Letzter Fallback — Plaso/log2timeline |
  
  
-## Stufe 4 — Dissect + Zimmerman Tools
+## Stufe 5 — Disk-Artefakt-Extraktion mit Dissect
  
  
 > **Aufgabe dieser Stufe**
@@ -749,7 +751,7 @@ class BaseParser(ABC):
 >
 > Dissect: Liest das Disk-Image DIREKT (kein Mounten nötig) und extrahiert Artefakte
 >
-> Zimmerman Tools: Parst Windows-Artefakte falls das Image ein Windows-System enthält
+> Dissect (target-query): Parst MFT, Registry, Prefetch, Browser-Historien und weitere Artefakte
 >
 > Setzt ctx.dissect_empty = True falls Dissect nichts findet (TSK Fallback nötig)
 >
@@ -778,7 +780,7 @@ class BaseParser(ABC):
 | Amcache | target-query -f amcache | Ausgeführte Programme (Windows) |
  
  
-## Stufe 4.1 — Autopsy (konditionell)
+## Stufe 5.1 — Autopsy (konditionell)
  
  
 > **Was ist Autopsy?**
@@ -800,7 +802,7 @@ class BaseParser(ABC):
  
  
 ```
-# stages/stage04_1_autopsy.py
+# stages/stage05_1_autopsy.py
 def should_run_autopsy(ctx: PipelineContext, force: bool = False) -> tuple[bool, str]:
     if force:
         return True, 'Manuell erzwungen (--force-autopsy)'
@@ -855,7 +857,7 @@ ctx.autopsy_ran = True
 ```
  
  
-## Stufe 4.5 — IOC-Extraktion
+## Stufe 6 — IOC-Extraktion
  
  
 > **Warum hier (nicht am Ende)?**
@@ -865,7 +867,7 @@ ctx.autopsy_ran = True
 >
 > Das MITRE-Mapping nutzt die extrahierten IOCs um Techniken zuzuordnen
 >
-> Quellen: Dissect + Zimmerman + Autopsy (falls gelaufen) + Log-Events
+> Quellen: Dissect + Autopsy (falls gelaufen) + Log-Events
 >
 > Falls TSK-Fallback: ioc_quality wird auf 'MITTEL' gesetzt (weniger Quellen)
  
@@ -887,7 +889,7 @@ ctx.autopsy_ran = True
 | Registry-Key | HKEY_[A-Z_]+\\[^\n]+ | HKEY_LOCAL_MACHINE\... |
  
  
-## Stufe 5 — TSK Fallback + Multi-Partition-Analyse
+## Stufe 7 — TSK Fallback + Multi-Partition-Analyse
  
  
 > **Wann wird TSK aktiv?**
@@ -923,7 +925,7 @@ ctx.autopsy_ran = True
  
  
 ```
-# stages/stage05_tsk.py
+# stages/stage07_tsk.py
 def analyse_partitions(ctx: PipelineContext):
     # mmls: Partitionstabelle lesen
     result = subprocess.run(
@@ -946,7 +948,7 @@ def analyse_partitions(ctx: PipelineContext):
 ```
  
  
-## Stufe 6 — Datennormalisierung
+## Stufe 8 — Datennormalisierung
  
  
 > **Warum ist das so wichtig?**
@@ -983,7 +985,7 @@ def to_utc(raw_timestamp: str, system_tz: str = 'UTC') -> datetime:
     except Exception:
         return datetime.min.replace(tzinfo=timezone.utc)
  
-# stages/stage06_normalize.py (v3.1 — DuckDB)
+# stages/stage08_normalize.py (v3.1 — DuckDB)
 def run(ctx: PipelineContext) -> PipelineContext:
     # Normalisierung per SQL-UPDATE direkt in DuckDB — kein RAM-Peak
     with EventStore(ctx.events_db_path) as store:
@@ -993,7 +995,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
 ```
  
  
-## Stufe 7 — Anti-Forensics-Erkennung
+## Stufe 9 — Anti-Forensics-Erkennung
  
  
 > **Was ist Anti-Forensics?**
@@ -1024,7 +1026,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
 | Secure Delete | Überschriebene freie Blöcke | Bewusste Datenlöschung |
  
  
-## Stufe 8 — ML-Anomalieerkennung (Isolation Forest)
+## Stufe 10 — ML-Anomalieerkennung (Isolation Forest)
  
  
 > **Was ist Isolation Forest? (Für Nicht-ML-Entwickler)**
@@ -1043,7 +1045,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
  
  
 ```
-# stages/stage08_ml.py
+# stages/stage10_ml.py
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import LabelEncoder
 import numpy as np
@@ -1088,7 +1090,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
 ```
  
  
-## Stufe 9 — MITRE ATT&CK Mapping
+## Stufe 11 — MITRE ATT&CK Mapping
  
  
 > **Was ist MITRE ATT&CK?**
@@ -1123,7 +1125,30 @@ def run(ctx: PipelineContext) -> PipelineContext:
 | T1110 | Brute Force | Viele fehlgeschlagene Logins von einer IP |
  
  
-## Stufe 11 — Fehler-Handling & Qualitätsprüfung
+## Stufe 12 — Ergebnis-Aggregation
+ 
+ 
+> **Aufgabe dieser Stufe**
+>
+> Fasst die Ergebnisse aller vorherigen Stufen regelbasiert zu einer strukturierten Textzusammenfassung zusammen.
+> Kein LLM-Aufruf — reine Aggregation bereits berechneter Werte.
+> Enthält: Systemidentifikation, Statistiken, Top-5 MITRE-Techniken, kritische Events, Anti-Forensics-Warnungen.
+>
+> Setzt ctx.enriched_summary
+
+
+```
+# stages/stage12_aggregation.py
+def run(ctx: PipelineContext) -> PipelineContext:
+    ctx.enriched_summary = _build_summary(ctx)
+    return ctx
+```
+
+
+---
+
+
+## Stufe 13 — Fehler-Handling & Qualitätsbewertung
  
  
 > **Grundregel für alle Stufen**
@@ -1166,7 +1191,7 @@ def evaluate_quality(ctx: PipelineContext) -> str:
 ```
  
  
-## Stufe 12 — Export & Archivierung
+## Stufe 14 — Export & Archivierung
  
  
 > **Was wird erstellt?**
@@ -1272,7 +1297,7 @@ sudo apt install default-jre -y
  
 # Forensik-Tools
 sudo apt install sleuthkit -y       # The Sleuth Kit
-sudo apt install wine -y            # Für Zimmerman Tools
+pip install dissect                 # Dissect Framework (target-query)
 sudo apt install xfsprogs -y        # xfs_db für XFS-Dateisysteme
  
 # Autopsy installieren
@@ -1294,7 +1319,7 @@ python3.11 -m venv venv
 source venv/bin/activate
  
 # requirements.txt — alle Pakete mit exakten Versionen
-pip install dissect==5.0.0
+pip install dissect==3.22
 pip install volatility3==2.5.0
 pip install timesketch-api-client==20240101
 pip install scikit-learn==1.4.0
@@ -1306,7 +1331,9 @@ pip install yara-python==4.3.1
 pip install python-dateutil==2.9.0
 pip install pytz==2024.1
 pip install numpy==1.26.4
-pip install duckdb  # Event-Store (RAM-Entlastung)
+pip install duckdb>=0.10.0
+pip install pyyaml==6.0.1
+pip install tqdm>=4.66.0
 ```
  
  
@@ -3336,7 +3363,7 @@ class PlasaFallbackParser(BaseParser):
  
  
 ```
-# stages/stage09_mitre.py
+# stages/stage11_mitre.py
 import json
 from pathlib import Path
  
@@ -3381,7 +3408,7 @@ Jede Zeile = ein Keyword das in Events gesucht wird → T-Nummer zugeordnet. Gro
  
  
 ```
-# stages/stage09_mitre.py — KEYWORD_MAP
+# stages/stage11_mitre.py — KEYWORD_MAP
 # Format: 'keyword_im_event': ('T-Nummer', 'Confidence 0.0-1.0')
  
 KEYWORD_MAP = {
@@ -3570,7 +3597,7 @@ def map_events_to_mitre(events: List[ForensicEvent],
  
  
 ```
-# stages/stage07_antiforensics.py
+# stages/stage09_antiforensics.py
 import yara
 from pathlib import Path
  
@@ -3648,7 +3675,7 @@ hayabusa:
   rules_dir:  'data/sigma-rules/rules/windows'
   min_level:  'medium'  # low, medium, high, critical
  
-# In stage03_logs.py — Hayabusa mit Sigma-Regeln aufrufen:
+# In stage04_logs.py — Hayabusa mit Sigma-Regeln aufrufen:
 subprocess.run([
     cfg.hayabusa_binary,
     'json-timeline',
@@ -3677,7 +3704,7 @@ Der Parser-Router entscheidet welcher Parser für welche Datei zuständig ist. E
  
  
 ```
-# stages/stage03_logs.py — ParserRouter
+# stages/stage04_logs.py — ParserRouter
 from parsers import (  # Alle Parser importieren
     SyslogParser, AuthLogParser, JournaldParser, KernLogParser,
     BootLogParser, DaemonLogParser, WtmpParser, LastlogParser,
@@ -3758,56 +3785,51 @@ def route_and_parse(log_file: Path) -> List[ForensicEvent]:
  
  
 ```
-# requirements.txt — EXAKTE VERSIONEN für reproduzierbare Installation
- 
 # ── Forensik-Frameworks ──────────────────────────────────────
-dissect==5.0.0                    # Disk-Image Analyse
-volatility3==2.5.0                # RAM-Dump Analyse
- 
+dissect==3.22                     # Disk-Image Analyse (Stage 3, Stage 5)
+volatility3==2.5.0                # RAM-Dump Analyse (Stage 2)
+
 # ── Log-Parsing ──────────────────────────────────────────────
-python-evtx==0.7.4                # EVTX direkt lesen (Fallback)
-construct==2.10.68                # Binär-Strukturen parsen
- 
+python-evtx==0.7.4                # EVTX direkt lesen (Fallback Stage 4)
+construct==2.10.68                # Binär-Strukturen parsen (wtmp, utmp, lastlog)
+
 # ── YARA ─────────────────────────────────────────────────────
-yara-python==4.3.1                # YARA-Regeln ausführen
- 
+yara-python==4.3.1                # YARA-Regeln ausführen (Stage 6, Stage 9)
+
 # ── ML ───────────────────────────────────────────────────────
-scikit-learn==1.4.0               # Isolation Forest
-numpy==1.26.4                     # Numerische Berechnungen
+scikit-learn==1.4.0               # Isolation Forest (Stage 10)
+numpy==1.26.4                     # Numerische Berechnungen (Stage 10)
 pandas==2.2.0                     # Datennormalisierung
- 
+
 # ── Timestamp & Datum ────────────────────────────────────────
-python-dateutil==2.9.0            # Timestamp-Parsing
-pytz==2024.1                      # Zeitzone-Konvertierung
- 
+python-dateutil==2.9.0            # Timestamp-Parsing (Stage 8)
+pytz==2024.1                      # Zeitzone-Konvertierung (Stage 8)
+
 # ── Datei-Erkennung ──────────────────────────────────────────
-python-magic==0.4.27              # Dateityp-Erkennung
- 
+python-magic==0.4.27              # Dateityp-Erkennung (Stage 1)
+
 # ── PDF-Erstellung ───────────────────────────────────────────
-reportlab==4.1.0                  # PDF generieren
- 
+reportlab==4.1.0                  # PDF generieren (Stage 14)
+
 # ── Timesketch ───────────────────────────────────────────────
-timesketch-api-client==20240101   # Timesketch Upload
- 
+timesketch-api-client==20240101   # Timesketch Upload (Stage 14)
+
 # ── MITRE ATT&CK ─────────────────────────────────────────────
-attackcti==0.3.4                  # ATT&CK API (für Updates)
- 
+attackcti==0.3.4                  # ATT&CK API
+
 # ── Datenbank ────────────────────────────────────────────────
-duckdb>=0.10.0                    # Event-Store (RAM-Entlastung, skalierbar bis 4 TB)
+duckdb>=0.10.0                    # Event-Store (Stage 4, Stage 8)
+
+# ── Fortschrittsanzeige ──────────────────────────────────────
+tqdm>=4.66.0                      # Fortschrittsbalken (Stage 4, 7, 9, 10, 11)
 
 # ── Konfiguration ────────────────────────────────────────────
-pyyaml==6.0.1                     # config.yaml lesen
- 
+pyyaml==6.0.1                     # config.yaml lesen (Stage 4.3, pipeline.py)
+
 # ── HTTP & Download ──────────────────────────────────────────
 requests==2.31.0                  # HTTP-Requests
 urllib3==2.2.0                    # HTTP-Client
- 
-# ── Hashing ──────────────────────────────────────────────────
-# hashlib ist Standard-Bibliothek — kein pip install nötig
- 
-# ── Komprimierung ────────────────────────────────────────────
-# gzip, zipfile sind Standard-Bibliothek — kein pip install nötig
- 
+
 # ── Testing ──────────────────────────────────────────────────
 pytest==8.1.0                     # Unit Tests
 pytest-cov==4.1.0                 # Test-Coverage
@@ -3835,9 +3857,8 @@ wget https://github.com/Yamato-Security/hayabusa/releases/latest/download/hayabu
 unzip hayabusa-linux.zip -d /opt/hayabusa/
 chmod +x /opt/hayabusa/hayabusa
  
-# 5. Zimmerman Tools via Wine (optional für Windows-Artefakte)
-wget https://f001.backblazeb2.com/file/EricZimmermanTools/net6/All_6.zip
-unzip All_6.zip -d /opt/zimmerman/
+# 5. Dissect Framework installieren
+pip install dissect
  
 # 6. Timesketch starten
 docker-compose up -d

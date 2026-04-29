@@ -9,12 +9,12 @@ MAX_EVENTS        = 500_000
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 8: ML-Anomalieerkennung (Isolation Forest)')
+    log.info('Stage 10: ML-Anomalieerkennung (Isolation Forest)')
     events = ctx.normalized_events
 
     if len(events) < 10:
         log.info('  Zu wenig Events für ML (<10) — übersprungen')
-        ctx.stage_status['stage_08'] = 'ÜBERSPRUNGEN — zu wenig Events'
+        ctx.stage_status['stage_10'] ='ÜBERSPRUNGEN — zu wenig Events'
         return ctx
 
     if len(events) > MAX_EVENTS:
@@ -71,8 +71,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
     except ImportError:
         log.warning('scikit-learn nicht installiert — ML-Stufe übersprungen')
-        ctx.stage_status['stage_08'] = 'ÜBERSPRUNGEN — scikit-learn fehlt'
+        ctx.stage_status['stage_10'] ='ÜBERSPRUNGEN — scikit-learn fehlt'
 
     if ctx.coc:
-        ctx.coc.add_entry('stage_08', f'ML: {len(ctx.anomalies)} Anomalien')
+        ctx.coc.add_entry('stage_10', f'ML: {len(ctx.anomalies)} Anomalien')
     return ctx
