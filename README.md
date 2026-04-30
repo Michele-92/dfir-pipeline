@@ -1424,6 +1424,114 @@ sudo docker compose ps
 > `docker compose up -d` erstellt Container neu und startet sie (nach Updates nötig).
  
  
+### 6.3.3 Nach VM-Neustart — Startreihenfolge
+ 
+ 
+```
+# Schritt 1 — Timesketch starten
+cd ~/timesketch
+sudo docker compose start
+ 
+# Schritt 2 — Ollama starten
+sudo systemctl start ollama
+ 
+# Schritt 3 — Status prüfen
+sudo docker compose ps
+# Alle 6 Container müssen "Up" zeigen:
+# nginx, opensearch, postgres, redis, timesketch-web, timesketch-worker
+ 
+# Schritt 4 — Browser öffnen
+# http://localhost:5000
+```
+ 
+ 
+### 6.3.4 Ollama — LLM Integration für Timesketch
+ 
+ 
+> **Was ist Ollama?**
+>
+> Ollama ist ein lokaler LLM-Server — das Sprachmodell läuft vollständig auf der VM,
+> keine Daten verlassen den Rechner. Wird für die KI-Funktionen in Timesketch benötigt.
+ 
+ 
+#### Installation
+ 
+ 
+```
+curl -fsSL https://ollama.com/install.sh | sh
+```
+ 
+ 
+#### Modell herunterladen
+ 
+ 
+```
+# llama3.2:1b — klein (~1.3 GB RAM), läuft auf VM ohne GPU
+ollama pull llama3.2:1b
+```
+ 
+ 
+#### Ollama für Docker erreichbar machen
+ 
+ 
+Timesketch läuft in Docker-Containern und kann `localhost` des Hosts nicht direkt erreichen.
+Ollama muss daher auf allen Interfaces lauschen (`0.0.0.0`):
+ 
+ 
+```
+# Ollama Konfiguration öffnen
+sudo systemctl edit ollama
+```
+ 
+ 
+Folgendes einfügen (zwischen erstem und zweitem Kommentarblock):
+ 
+ 
+```
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0"
+```
+ 
+ 
+Dann speichern (`Ctrl+X → Y → Enter`) und neu starten:
+ 
+ 
+```
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+ 
+# Verbindung testen — muss JSON zurückgeben
+curl http://172.17.0.1:11434/api/tags
+```
+ 
+ 
+#### Ollama automatisch beim VM-Start starten
+ 
+ 
+```
+sudo systemctl enable ollama
+```
+ 
+ 
+#### Timesketch auf Ollama konfigurieren
+ 
+ 
+Das Script `fix_timesketch_llm.py` konfiguriert Timesketch automatisch auf Ollama:
+ 
+ 
+```
+cd ~/dfir-pipeline
+ 
+sudo docker cp fix_timesketch_llm.py timesketch-web:/tmp/fix_timesketch_llm.py
+sudo docker exec timesketch-web python3 /tmp/fix_timesketch_llm.py
+sudo docker restart timesketch-web
+```
+ 
+ 
+> **RAM-Hinweis:** `llama3.2:1b` benötigt ~1.3 GB RAM.
+> `llama3.1:8b` benötigt ~4.8 GB — zu viel wenn Docker-Stack bereits läuft.
+ 
+ 
 ## 6.4 Konfiguration (config.yaml)
  
  
@@ -1716,6 +1824,51 @@ Sketch → "More" → "Export"
    - Views als CSV
    - Metadaten
 ```
+ 
+ 
+### 6.5.12 KI-Funktionen (Ollama)
+ 
+ 
+> **Voraussetzung:** Ollama läuft (`sudo systemctl start ollama`) und
+> Timesketch wurde mit `fix_timesketch_llm.py` konfiguriert (siehe 6.3.4)
+ 
+ 
+In Timesketch unter **Settings → AI powered features** gibt es drei Schalter:
+ 
+ 
+| Funktion | Was sie macht |
+| --- | --- |
+| Main Switch | Alle KI-Funktionen ein/ausschalten |
+| Event Summarization | Markierte Events automatisch zusammenfassen |
+| AI Generated Queries | Suchanfragen in normaler Sprache eingeben |
+ 
+ 
+#### Event Summarization — Ereignisse zusammenfassen
+ 
+ 
+```
+1. Im Explore Tab mehrere Events markieren
+2. "Summarize" Button klicken
+3. Ollama fasst die Events in verständlichem Text zusammen
+→ Nützlich für den Betreuer — statt 50 rohe Log-Zeilen eine kurze Erklärung
+```
+ 
+ 
+#### AI Generated Queries — KI-Suchanfragen
+ 
+ 
+```
+Im Explore Tab → KI-Symbol neben dem Suchfeld
+Beispiel-Fragen in normaler Sprache:
+  "Zeige mir alle fehlgeschlagenen SSH-Logins von gestern"
+  "Welche neuen Benutzer wurden erstellt?"
+  "Gibt es Hinweise auf Log-Löschung?"
+→ Ollama übersetzt die Frage automatisch in eine OpenSearch-Suchanfrage
+```
+ 
+ 
+> **Hinweis:** Beim ersten Aufruf lädt Ollama das Modell in den RAM (kann 30-60 Sekunden
+> dauern). Danach ist es schneller. Verwendetes Modell: llama3.2:1b (~1.3 GB RAM).
  
  
 ---
