@@ -1350,23 +1350,78 @@ pip install -r requirements.txt
 ```
  
  
-## 6.3 Timesketch starten (Docker)
+## 6.3 Timesketch — Installation & Start (Docker)
+ 
+ 
+> **Systemanforderungen**
+ 
+>
+> Ubuntu 22.04 LTS
+>
+> Mindestens 8 GB RAM
+>
+> Docker muss installiert sein (siehe 6.1)
+>
+> Installierte Services: Timesketch Web/API, Worker, PostgreSQL, OpenSearch, Redis, Nginx
+ 
+ 
+### 6.3.1 Erstmalige Installation
  
  
 ```
-# docker-compose.yml herunterladen
-curl -O https://raw.githubusercontent.com/google/timesketch/main/docker-compose.yml
+# Schritt 1 — Deploy-Script herunterladen (im gewünschten Zielordner ausführen)
+# Das Script erstellt automatisch einen Unterordner "timesketch/" im aktuellen Verzeichnis
+# Beispiel: ~/timesketch/ wenn man es im Home-Verzeichnis ausführt
+curl -s -O https://raw.githubusercontent.com/google/timesketch/master/contrib/deploy_timesketch.sh
+chmod 755 deploy_timesketch.sh
+ 
+# Schritt 2 — Installation ausführen
+sudo ./deploy_timesketch.sh
+ 
+# Schritt 3 — In den erstellten Timesketch-Ordner wechseln und starten
+cd timesketch
+sudo docker compose up -d
+ 
+# Schritt 4 — Ersten Benutzer erstellen
+sudo docker compose exec timesketch-web tsctl create-user admin
+# Passwort wird interaktiv abgefragt
+ 
+# Schritt 5 — Browser öffnen
+# http://localhost:5000
+```
+ 
+ 
+### 6.3.2 Täglicher Betrieb (bereits installiert)
+ 
+ 
+```
+# In den Timesketch-Ordner wechseln (Pfad je nach Installation)
+cd ~/timesketch        # falls im Home-Verzeichnis installiert
+# cd /opt/timesketch  # falls unter /opt installiert
  
 # Timesketch starten
-docker-compose up -d
+sudo docker compose start
  
-# Warten bis Timesketch bereit ist (ca. 2-3 Minuten)
-docker-compose logs -f timesketch
+# Status prüfen — alle 6 Container sollten "Up" sein:
+# nginx, opensearch, postgres, redis, timesketch-web, timesketch-worker
+sudo docker compose ps
  
-# Browser öffnen
-# http://localhost:5000
-# Standard-Login: admin / changeme
+# Timesketch stoppen
+sudo docker compose stop
+ 
+# Timesketch neu erstellen + starten (nach Updates)
+sudo docker compose up -d
+ 
+# Logs beobachten
+sudo docker compose logs -f timesketch-web
+ 
+# Status prüfen
+sudo docker compose ps
 ```
+ 
+ 
+> **Hinweis:** `docker compose start` startet bereits existierende Container (schnell).
+> `docker compose up -d` erstellt Container neu und startet sie (nach Updates nötig).
  
  
 ## 6.4 Konfiguration (config.yaml)
@@ -1404,6 +1459,263 @@ output:
  
  
  
+ 
+ 
+---
+ 
+ 
+## 6.5 Timesketch — Anleitung für den Betreuer
+ 
+ 
+---
+ 
+ 
+### 6.5.1 Zugang & Login
+ 
+ 
+```
+Browser öffnen: http://localhost:5000
+Benutzername:   admin
+Passwort:       (beim Setup vergeben)
+```
+ 
+ 
+### 6.5.2 Sketch erstellen (= ein Fall)
+ 
+ 
+```
+1. "New Sketch" klicken
+2. Namen vergeben z.B. DFIR_Case_2026
+3. Beschreibung hinzufügen
+4. "Import Timeline" klicken → events_upload.jsonl hochladen
+5. Timeline-Name vergeben z.B. DFIR_Pipeline_Events
+6. Warten bis Status "ready" (kann 1–5 Minuten dauern)
+```
+ 
+ 
+### 6.5.3 Die 5 Tabs im Überblick
+ 
+ 
+| Tab | Funktion |
+| --- | --- |
+| Overview | Zusammenfassung, Shortcuts zu gespeicherten Views |
+| Explore | Hauptbereich — Suchen, Filtern, Timeline |
+| Stories | Narrative Zusammenfassung des Falls |
+| Attributes | Sketch-Metadaten |
+| Intelligence | Threat Intelligence Indikatoren |
+ 
+ 
+### 6.5.4 Suche — Die wichtigsten Felder
+ 
+ 
+| Feld | Bedeutung | Beispiel |
+| --- | --- | --- |
+| message | Inhalt des Events | message:"Failed password" |
+| datetime | Datum/Zeit ISO8601 | datetime:"2026-04-22T09:15:33" |
+| timestamp_desc | Art des Events | timestamp_desc:"ssh_login_failed" |
+| source | Welcher Parser | source:auth |
+ 
+ 
+### 6.5.5 Zeitraum-Suchen
+ 
+ 
+```
+# Bestimmter Tag
+datetime:[2026-04-22 TO 2026-04-23]
+ 
+# Alles vor einem Datum
+datetime:[* TO 2026-04-22]
+ 
+# Alles nach einem Datum
+datetime:[2026-04-22 TO *]
+```
+ 
+ 
+### 6.5.6 DFIR-spezifische Suchanfragen
+ 
+ 
+#### SSH & Authentifizierung
+ 
+ 
+```
+# Fehlgeschlagene SSH-Logins
+message:"Failed password"
+ 
+# Erfolgreiche SSH-Logins
+message:"Accepted password" OR message:"Accepted publickey"
+ 
+# Ungültige User
+message:"Invalid user"
+ 
+# Alle Auth-Events
+source:auth
+ 
+# Brute-Force Erkennung (viele Fehler von einer IP)
+message:"Failed password" AND message:"192.168.1."
+```
+ 
+ 
+#### Verdächtige Befehle
+ 
+ 
+```
+# Cron-Jobs (Persistenz)
+source:cron OR message:"crontab"
+ 
+# Bash-History durchsuchen
+source:bash_history
+ 
+# Verdächtige Downloads
+message:"wget" OR message:"curl"
+ 
+# Privilege Escalation
+message:"sudo" OR message:"su root"
+```
+ 
+ 
+#### User-Manipulation
+ 
+ 
+```
+# Neue Benutzer erstellt
+message:"new user" OR message:"useradd"
+ 
+# Benutzer gelöscht
+message:"delete user"
+ 
+# Passwort-Änderungen
+message:"passwd"
+```
+ 
+ 
+#### Anti-Forensics
+ 
+ 
+```
+# Log-Löschung
+message:"truncate" OR message:"> /var/log"
+ 
+# Timestomping
+message:"timestomp" OR message:"touch -t"
+ 
+# Sichere Löschung
+message:"shred" OR message:"wipe"
+```
+ 
+ 
+#### MITRE ATT&CK Techniken
+ 
+ 
+```
+# Credential Dumping
+message:"/etc/shadow"
+ 
+# Firewall deaktiviert
+message:"ufw disable" OR message:"iptables -f"
+ 
+# Obfuscation
+message:"base64"
+ 
+# Rootkit-Indikatoren
+message:"insmod" OR message:"ld_preload"
+```
+ 
+ 
+#### Nach Parser/Quelle filtern
+ 
+ 
+```
+source:syslog          # System-Logs
+source:auth            # Authentifizierung
+source:ssh             # SSH spezifisch
+source:cron            # Geplante Aufgaben
+source:audit           # Linux Audit Framework
+source:fail2ban        # Brute-Force Bans
+source:ufw             # Firewall
+source:bash_history    # Shell-Befehle
+source:docker          # Container
+source:apache_access   # Web-Server
+source:evtx            # Windows Event Logs (Hayabusa)
+```
+ 
+ 
+#### Kombinierte Suchen (AND / OR / NOT)
+ 
+ 
+```
+# SSH-Fehler in bestimmtem Zeitraum
+message:"Failed password" AND datetime:[2026-04-20 TO 2026-04-22]
+ 
+# Alle kritischen Events außer Cron
+message:"error" AND NOT source:cron
+ 
+# Mehrere Quellen kombinieren
+source:auth OR source:ssh OR source:fail2ban
+```
+ 
+ 
+### 6.5.7 Events bearbeiten
+ 
+ 
+| Aktion | Symbol | Wofür |
+| --- | --- | --- |
+| Star | ⭐ | Wichtige Events markieren (für Stories) |
+| Tag | 🏷 | Kategorisieren z.B. mitre-t1110, suspicious |
+| Comment | 💬 | Notizen direkt am Event hinterlassen |
+| Context Query | 🔍 | Verwandte Events automatisch finden |
+ 
+ 
+### 6.5.8 Views speichern
+ 
+ 
+```
+1. Suchanfrage eingeben
+2. Filter anwenden
+3. "Save as view" klicken (oben rechts)
+4. Name vergeben z.B. SSH_Brute_Force
+→ View ist danach im Overview Tab verfügbar
+```
+ 
+ 
+### 6.5.9 Story erstellen (Untersuchungsbericht)
+ 
+ 
+```
+1. "Stories" Tab → "New Story" klicken
+2. Titel vergeben z.B. Forensische Analyse — Verdächtiger Vorfall
+3. Text in Markdown schreiben
+4. Enter drücken → gespeicherte Views/Suchen einfügen
+5. Story kann als Teil des Sketch-Exports heruntergeladen werden
+```
+ 
+ 
+### 6.5.10 Analyzer ausführen (automatische Anreicherung)
+ 
+ 
+```
+Explore Tab → Analyzers Button
+```
+ 
+ 
+| Analyzer | Funktion |
+| --- | --- |
+| Sigma Analyzer | Matched Sigma-Rules auf Events, erstellt automatisch Story |
+| Domain Analyzer | Extrahiert Domains aus URLs und Events |
+| Windows EVTX Gap | Erkennt Lücken in EVTX-Logs (Hinweis auf Log-Löschung) |
+| Browser Search | Extrahiert Suchbegriffe aus Browser-URLs |
+ 
+ 
+### 6.5.11 Export
+ 
+ 
+```
+Sketch → "More" → "Export"
+→ ZIP-Datei mit:
+   - Events (starred, tagged, kommentiert)
+   - Stories als HTML
+   - Views als CSV
+   - Metadaten
+```
  
  
 ---
