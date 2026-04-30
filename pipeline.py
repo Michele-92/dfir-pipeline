@@ -15,11 +15,11 @@ from stages import (
     stage01_detection,
     stage02_memory,
     stage03_profiling,
-    stage04_logs,
-    stage05_disk,
-    stage05_1_autopsy,
-    stage06_ioc,
-    stage07_tsk,
+    stage04_disk,
+    stage04_1_autopsy,
+    stage05_tsk,
+    stage06_logs,
+    stage07_ioc,
     stage08_normalize,
     stage09_antiforensics,
     stage10_ml,
@@ -95,12 +95,12 @@ def main():
     ctx = run_stage(stage01_detection.run,      ctx, 'stage_01')
     ctx = run_stage(stage02_memory.run,         ctx, 'stage_02')
     ctx = run_stage(stage03_profiling.run,      ctx, 'stage_03')
-    ctx = run_stage(stage05_disk.run,           ctx, 'stage_05')
-    ctx = run_stage(stage05_1_autopsy.run,      ctx, 'stage_05_1',
+    ctx = run_stage(stage04_disk.run,           ctx, 'stage_04')
+    ctx = run_stage(stage04_1_autopsy.run,      ctx, 'stage_04_1',
                     force=args.force_autopsy, skip=args.no_autopsy)
-    ctx = run_stage(stage07_tsk.run,            ctx, 'stage_07')
-    ctx = run_stage(stage04_logs.run,           ctx, 'stage_04')
-    ctx = run_stage(stage06_ioc.run,            ctx, 'stage_06')
+    ctx = run_stage(stage05_tsk.run,            ctx, 'stage_05')
+    ctx = run_stage(stage06_logs.run,           ctx, 'stage_06')
+    ctx = run_stage(stage07_ioc.run,            ctx, 'stage_07')
     ctx = run_stage(stage08_normalize.run,      ctx, 'stage_08')
     ctx = run_stage(stage09_antiforensics.run,  ctx, 'stage_09')
     ctx = run_stage(stage10_ml.run,             ctx, 'stage_10')

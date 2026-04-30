@@ -72,7 +72,7 @@ _BATCH_SIZE = 1000
 
 def run(ctx: PipelineContext) -> PipelineContext:
     workers = ctx.workers
-    log.info(f'Stage 4: Log-Parsing ({workers} Worker)')
+    log.info(f'Stage 6: Log-Parsing ({workers} Worker)')
     log_files = _find_log_files(ctx)
     log.info(f'  {len(log_files)} Log-Dateien gefunden')
     log.info(f'  Parsing mit {workers} parallelen Worker-Prozessen — schreibe Events in DuckDB...')

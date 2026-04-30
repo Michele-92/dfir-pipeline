@@ -26,7 +26,7 @@ class PipelineContext:
     # ── Stage 2: Memory ───────────────────────────────────
     memory_results:     Dict[str, Any] = field(default_factory=dict)
 
-    # ── Stage 2.5: System-Profiling ───────────────────────
+    # ── Stage 3: System-Profiling ─────────────────────────
     os_family:          str  = ''
     os_name:            str  = ''
     kernel_version:     str  = ''
@@ -35,15 +35,7 @@ class PipelineContext:
     log_paths:          Dict[str, Path] = field(default_factory=dict)
 
     # ── Performance ───────────────────────────────────────
-    workers:            int                 = 2
-
-    # ── Stage 6: Log-Parsing ──────────────────────────────
-    events:             List[ForensicEvent] = field(default_factory=list)
-    events_db_path:     Optional[Path]      = None
-    parser_stats:       Dict[str, int]      = field(default_factory=dict)
-    total_log_lines:    int = 0
-    parsed_events:      int = 0
-    hayabusa_hits:      int = 0
+    workers:            int = 2
 
     # ── Stage 4: Disk ─────────────────────────────────────
     disk_artifacts:     Dict[str, Any] = field(default_factory=dict)
@@ -58,31 +50,39 @@ class PipelineContext:
     autopsy_reason:     str  = ''
     autopsy_results:    Dict[str, Any] = field(default_factory=dict)
 
-    # ── Stage 4.5: IOC-Extraktion ─────────────────────────
-    iocs:               List[IOC] = field(default_factory=list)
-    ioc_quality:        str = 'HOCH'
-
     # ── Stage 5: TSK Fallback ─────────────────────────────
     tsk_fallback_used:  bool = False
     tsk_results:        Dict[str, Any] = field(default_factory=dict)
 
-    # ── Stage 6: Normalisierung ───────────────────────────
+    # ── Stage 6: Log-Parsing ─────────────────────────────
+    events:             List[ForensicEvent] = field(default_factory=list)
+    events_db_path:     Optional[Path]      = None
+    parser_stats:       Dict[str, int]      = field(default_factory=dict)
+    total_log_lines:    int = 0
+    parsed_events:      int = 0
+    hayabusa_hits:      int = 0
+
+    # ── Stage 7: IOC-Extraktion ───────────────────────────
+    iocs:               List[IOC] = field(default_factory=list)
+    ioc_quality:        str = 'HOCH'
+
+    # ── Stage 8: Normalisierung ───────────────────────────
     normalized_events:  List[ForensicEvent] = field(default_factory=list)
 
-    # ── Stage 7: Anti-Forensics ───────────────────────────
+    # ── Stage 9: Anti-Forensics ───────────────────────────
     antiforensics_hits: List[Dict] = field(default_factory=list)
 
-    # ── Stage 8: ML ───────────────────────────────────────
+    # ── Stage 10: ML ──────────────────────────────────────
     anomalies:          List[ForensicEvent] = field(default_factory=list)
     anomaly_scores:     List[float]         = field(default_factory=list)
 
-    # ── Stage 9: MITRE ────────────────────────────────────
+    # ── Stage 11: MITRE ───────────────────────────────────
     mitre_hits:         List[Dict] = field(default_factory=list)
 
-    # ── Stage 10: KI ──────────────────────────────────────
+    # ── Stage 12: Ergebnis-Aggregation ────────────────────
     enriched_summary:   str = ''
 
-    # ── Stage 11: Qualität ────────────────────────────────
+    # ── Stage 13: Qualität ────────────────────────────────
     stage_errors:       Dict[str, str] = field(default_factory=dict)
     stage_status:       Dict[str, str] = field(default_factory=dict)
 

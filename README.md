@@ -132,11 +132,11 @@ dfir_pipeline/
 │   ├── stage01_detection.py       ← Stufe 1:  Dateierkennung + Hash + Chain of Custody
 │   ├── stage02_memory.py          ← Stufe 2:  RAM-Analyse (Volatility3)
 │   ├── stage03_profiling.py       ← Stufe 3:  System-Profiling (OS, Kernel, Hostname)
-│   ├── stage04_logs.py            ← Stufe 4:  Log-Parsing (38 Parser + Hayabusa Stage 4.3)
-│   ├── stage05_disk.py            ← Stufe 5:  Disk-Artefakt-Extraktion (Dissect)
-│   ├── stage05_1_autopsy.py       ← Stufe 5.1: Autopsy (konditionell, 5 Bedingungen)
-│   ├── stage06_ioc.py             ← Stufe 6:  IOC-Extraktion
-│   ├── stage07_tsk.py             ← Stufe 7:  TSK Fallback (nur wenn Dissect leer)
+│   ├── stage04_disk.py            ← Stufe 4:  Disk-Artefakt-Extraktion (Dissect)
+│   ├── stage04_1_autopsy.py       ← Stufe 4.1: Autopsy (konditionell, 5 Bedingungen)
+│   ├── stage05_tsk.py             ← Stufe 5:  TSK Fallback (nur wenn Dissect leer)
+│   ├── stage06_logs.py            ← Stufe 6:  Log-Parsing (38 Parser + Hayabusa)
+│   ├── stage07_ioc.py             ← Stufe 7:  IOC-Extraktion
 │   ├── stage08_normalize.py       ← Stufe 8:  Datennormalisierung → UTC
 │   ├── stage09_antiforensics.py   ← Stufe 9:  Anti-Forensics + YARA
 │   ├── stage10_ml.py              ← Stufe 10: ML-Anomalieerkennung (Isolation Forest)
@@ -271,87 +271,88 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
- 
+
 @dataclass
 class PipelineContext:
     # ── Eingabe ──────────────────────────────────────────
-    disk_image_path:   Optional[Path] = None   # Pfad zum Disk-Image
-    ram_dump_path:     Optional[Path] = None   # Pfad zum RAM-Dump (optional)
-    logs_dir_path:     Optional[Path] = None   # Pfad zum Log-Ordner (optional)
-    output_dir:        Path = Path('./output') # Ausgabe-Ordner
-    case_dir:          Optional[Path] = None   # Wird in Stufe 1 gesetzt
- 
+    disk_image_path:    Optional[Path] = None
+    ram_dump_path:      Optional[Path] = None
+    logs_dir_path:      Optional[Path] = None
+    output_dir:         Path           = field(default_factory=lambda: Path('./output'))
+    case_dir:           Optional[Path] = None
+
     # ── Stage 1: Dateierkennung ───────────────────────────
-    file_type:         str = ''                # 'E01', 'DD', 'VMDK', 'RAW'
-    file_size_gb:      float = 0.0
-    sha256:            str = ''
-    md5:               str = ''
- 
+    file_type:          str   = ''
+    file_size_gb:       float = 0.0
+    sha256:             str   = ''
+    md5:                str   = ''
+
     # ── Stage 2: Memory ───────────────────────────────────
-    memory_results:    Dict[str, Any] = field(default_factory=dict)
-    # Enthält: processes, network, bash_history, modules, malfind
- 
-    # ── Stage 3: System-Profiling ────────────────────────
-    os_family:         str = ''   # 'debian', 'rhel', 'arch', 'alpine'
-    os_name:           str = ''   # 'Ubuntu 22.04 LTS'
-    kernel_version:    str = ''   # '5.15.0-91-generic'
-    hostname:          str = ''
-    timezone:          str = 'UTC'
-    log_paths:         Dict[str, Path] = field(default_factory=dict)
-    # log_paths wird von Stage 3 gesetzt und von Stage 4 genutzt
+    memory_results:     Dict[str, Any] = field(default_factory=dict)
 
-    # ── Stage 4: Log-Parsing ──────────────────────────────
-    events:            List['ForensicEvent'] = field(default_factory=list)  # leer nach v3.1
-    events_db_path:    Optional[Path] = None          # Pfad zur events.db (DuckDB)
-    parser_stats:      Dict[str, int] = field(default_factory=dict)  # Events pro Parser
-    total_log_lines:   int = 0
-    parsed_events:     int = 0
-    hayabusa_hits:     int = 0    # Treffer aus Stage 4.3 (Hayabusa EVTX-Analyse)
+    # ── Stage 3: System-Profiling ─────────────────────────
+    os_family:          str  = ''
+    os_name:            str  = ''
+    kernel_version:     str  = ''
+    hostname:           str  = ''
+    timezone:           str  = 'UTC'
+    log_paths:          Dict[str, Path] = field(default_factory=dict)
 
-    # ── Stage 5: Disk ─────────────────────────────────────
-    disk_artifacts:    Dict[str, Any] = field(default_factory=dict)
-    image_count:       int = 0
-    email_db_found:    bool = False
-    encrypted_count:   int = 0
-    unknown_ext_count: int = 0
-    dissect_empty:     bool = False  # True = TSK Fallback (Stage 7) nötig
+    # ── Performance ───────────────────────────────────────
+    workers:            int = 2
 
-    # ── Stage 5.1: Autopsy ────────────────────────────────
-    autopsy_ran:       bool = False
-    autopsy_reason:    str = ''      # Warum gestartet / übersprungen
-    autopsy_results:   Dict[str, Any] = field(default_factory=dict)
+    # ── Stage 4: Disk ─────────────────────────────────────
+    disk_artifacts:     Dict[str, Any] = field(default_factory=dict)
+    image_count:        int  = 0
+    email_db_found:     bool = False
+    encrypted_count:    int  = 0
+    unknown_ext_count:  int  = 0
+    dissect_empty:      bool = False  # True = TSK Fallback (Stage 5) nötig
 
-    # ── Stage 6: IOC-Extraktion ───────────────────────────
-    iocs:              List['IOC'] = field(default_factory=list)
-    ioc_quality:       str = 'HOCH' # 'HOCH' oder 'MITTEL' (TSK-Fallback)
+    # ── Stage 4.1: Autopsy ────────────────────────────────
+    autopsy_ran:        bool = False
+    autopsy_reason:     str  = ''
+    autopsy_results:    Dict[str, Any] = field(default_factory=dict)
 
-    # ── Stage 7: TSK Fallback ─────────────────────────────
-    tsk_fallback_used: bool = False
-    tsk_results:       Dict[str, Any] = field(default_factory=dict)
+    # ── Stage 5: TSK Fallback ─────────────────────────────
+    tsk_fallback_used:  bool = False
+    tsk_results:        Dict[str, Any] = field(default_factory=dict)
+
+    # ── Stage 6: Log-Parsing ─────────────────────────────
+    events:             List['ForensicEvent'] = field(default_factory=list)
+    events_db_path:     Optional[Path]        = None
+    parser_stats:       Dict[str, int]        = field(default_factory=dict)
+    total_log_lines:    int = 0
+    parsed_events:      int = 0
+    hayabusa_hits:      int = 0    # Treffer aus Stage 6.3 (Hayabusa EVTX-Analyse)
+
+    # ── Stage 7: IOC-Extraktion ───────────────────────────
+    iocs:               List['IOC'] = field(default_factory=list)
+    ioc_quality:        str = 'HOCH'  # 'HOCH' oder 'MITTEL' (TSK-Fallback)
 
     # ── Stage 8: Normalisierung ───────────────────────────
-    normalized_events: List['ForensicEvent'] = field(default_factory=list)
+    normalized_events:  List['ForensicEvent'] = field(default_factory=list)
 
     # ── Stage 9: Anti-Forensics ───────────────────────────
     antiforensics_hits: List[Dict] = field(default_factory=list)
 
     # ── Stage 10: ML ──────────────────────────────────────
-    anomalies:         List['ForensicEvent'] = field(default_factory=list)
-    anomaly_scores:    List[float] = field(default_factory=list)
+    anomalies:          List['ForensicEvent'] = field(default_factory=list)
+    anomaly_scores:     List[float]           = field(default_factory=list)
 
     # ── Stage 11: MITRE ───────────────────────────────────
-    mitre_hits:        List[Dict] = field(default_factory=list)
+    mitre_hits:         List[Dict] = field(default_factory=list)
 
     # ── Stage 12: Ergebnis-Aggregation ────────────────────
-    enriched_summary:  str = ''
+    enriched_summary:   str = ''
 
     # ── Stage 13: Qualität ────────────────────────────────
-    stage_errors:      Dict[str, str] = field(default_factory=dict)
-    stage_status:      Dict[str, str] = field(default_factory=dict)
- 
+    stage_errors:       Dict[str, str] = field(default_factory=dict)
+    stage_status:       Dict[str, str] = field(default_factory=dict)
+
     # ── Chain of Custody ──────────────────────────────────
-    coc:               Optional['ChainOfCustody'] = None
-    start_time:        datetime = field(default_factory=datetime.now)
+    coc:                Optional['ChainOfCustody'] = None
+    start_time:         datetime = field(default_factory=datetime.now)
 ```
  
  
@@ -410,20 +411,20 @@ class IOC:
 | 1 | Automatische Dateierkennung & Beweissicherung | Dateityp erkennen, SHA256/MD5 berechnen, Chain of Custody starten | python-magic, hashlib |
 | 2 | RAM-Analyse mit Volatility3 | RAM-Dump analysieren, Prozesse/Netzwerk/Module auslesen | Volatility3 |
 | 3 | System-Profiling | Linux-Familie, Kernel, Hostname, Log-Pfade bestimmen | dissect (target-query), os-release |
-| 4 | Log-Parsing (38 Parser) | Alle Log-Formate parsen, Events in DuckDB speichern | custom Parser, Plaso (Fallback) |
-| 4.1 | Parser-Architektur & automatisches Routing | Format-Erkennung, automatisches Parser-Routing | regex, can_parse() |
-| 4.2 | 38 Linux-Log-Parser | Syslog, auth.log, Journald, Apache, SSH, Cron, ... | custom Python Parser |
-| 4.3 | Hayabusa EVTX-Analyse (konditionell) | Sigma-Rule-basierte Analyse von Windows EVTX-Logs | Hayabusa, Sigma-Rules |
-| 5 | Disk-Artefakt-Extraktion mit Dissect | MFT, Registry, Prefetch, Browser, SSH aus Disk-Image | Dissect (target-query) |
-| 5.1 | Autopsy (konditionell) | Startet nur wenn mind. eine Bedingung erfüllt ist | Autopsy Headless (Java) |
-| 5.1.1 | Bedingung 1: Bilddateien > 100 | EXIF, GPS-Daten, Thumbnails analysieren | Autopsy EXIF Parser |
-| 5.1.2 | Bedingung 2: E-Mail-Datenbank gefunden | PST / OST / MBOX parsen, verdächtige E-Mails filtern | Autopsy Email Parser |
-| 5.1.3 | Bedingung 3: Verschlüsselte Dateien | Verschlüsselungs-Typ erkennen und dokumentieren | Autopsy Encryption |
-| 5.1.4 | Bedingung 4: Unbekannte Dateitypen > 50 | Hash-Datenbank Abgleich (NSRL) | Autopsy Hash Lookup |
-| 5.1.5 | Bedingung 5: Keine Bedingung erfüllt | Autopsy wird übersprungen — spart ca. 45 Minuten | — (übersprungen) |
-| 6 | IOC-Extraktion | IPs, Domains, Hashes, CVEs, Registry-Keys extrahieren | regex, yara-python |
-| 7 | TSK Fallback (konditionell) | Falls Dissect leer: TSK übernimmt Dateisystem-Analyse | The Sleuth Kit |
-| 7.1 | Multi-Partition-Analyse | MBR/GPT Partitionstabellen lesen, jede Partition einzeln | TSK mmls, fls, icat |
+| 4 | Disk-Artefakt-Extraktion mit Dissect | MFT, Registry, Prefetch, Browser, SSH aus Disk-Image | Dissect (target-query) |
+| 4.1 | Autopsy (konditionell) | Startet nur wenn mind. eine Bedingung erfüllt ist | Autopsy Headless (Java) |
+| 4.1.1 | Bedingung 1: Bilddateien > 100 | EXIF, GPS-Daten, Thumbnails analysieren | Autopsy EXIF Parser |
+| 4.1.2 | Bedingung 2: E-Mail-Datenbank gefunden | PST / OST / MBOX parsen, verdächtige E-Mails filtern | Autopsy Email Parser |
+| 4.1.3 | Bedingung 3: Verschlüsselte Dateien | Verschlüsselungs-Typ erkennen und dokumentieren | Autopsy Encryption |
+| 4.1.4 | Bedingung 4: Unbekannte Dateitypen > 50 | Hash-Datenbank Abgleich (NSRL) | Autopsy Hash Lookup |
+| 4.1.5 | Bedingung 5: Keine Bedingung erfüllt | Autopsy wird übersprungen — spart ca. 45 Minuten | — (übersprungen) |
+| 5 | TSK Fallback (konditionell) | Falls Dissect leer: TSK übernimmt Dateisystem-Analyse | The Sleuth Kit |
+| 5.1 | Multi-Partition-Analyse | MBR/GPT Partitionstabellen lesen, jede Partition einzeln | TSK mmls, fls, icat |
+| 6 | Log-Parsing (38 Parser) | Alle Log-Formate parsen, Events in DuckDB speichern | custom Parser, Plaso (Fallback) |
+| 6.1 | Parser-Architektur & automatisches Routing | Format-Erkennung, automatisches Parser-Routing | regex, can_parse() |
+| 6.2 | 38 Linux-Log-Parser | Syslog, auth.log, Journald, Apache, SSH, Cron, ... | custom Python Parser |
+| 6.3 | Hayabusa EVTX-Analyse (konditionell) | Sigma-Rule-basierte Analyse von Windows EVTX-Logs | Hayabusa, Sigma-Rules |
+| 7 | IOC-Extraktion | IPs, Domains, Hashes, CVEs, Registry-Keys extrahieren | regex, yara-python |
 | 8 | Datennormalisierung | Alle Timestamps → UTC, einheitliches Schema | DuckDB, dateutil |
 | 9 | Anti-Forensics-Erkennung | Timestomping, Log-Wiping, Rootkit-Indikatoren, YARA | custom, yara-python |
 | 10 | ML-basierte Anomalieerkennung | Isolation Forest markiert statistische Ausreißer | scikit-learn, numpy |
@@ -584,9 +585,9 @@ def create_case_dir(output_dir: Path) -> Path:
 >
 > Ubuntu: /var/log/syslog — CentOS: /var/log/messages — Alpine: /var/log/messages
 >
-> Ohne System-Profiling würden die Parser in Stufe 3 blind suchen
+> Ohne System-Profiling würden die Parser in Stufe 6 blind suchen
 >
-> ctx.log_paths wird hier gesetzt und von Stufe 3 direkt genutzt
+> ctx.log_paths wird hier gesetzt und von Stufe 6 direkt genutzt
  
  
  
@@ -630,13 +631,186 @@ def detect_os_family(ctx: PipelineContext) -> PipelineContext:
 ```
  
  
-## Stufe 4 — Log-Parsing (38 Parser)
+## Stufe 4 — Disk-Artefakt-Extraktion mit Dissect
  
  
 > **Aufgabe dieser Stufe**
  
 >
-> stage04_logs.py ist der Manager — er koordiniert alle 38 Parser
+> Dissect: Liest das Disk-Image DIREKT (kein Mounten nötig) und extrahiert Artefakte
+>
+> Dissect (target-query): Parst MFT, Registry, Prefetch, Browser-Historien und weitere Artefakte
+>
+> Setzt ctx.dissect_empty = True falls Dissect nichts findet (TSK Fallback nötig)
+>
+> Setzt ctx.image_count, ctx.email_db_found, ctx.encrypted_count für Autopsy-Trigger
+ 
+ 
+ 
+### Dissect — extrahierte Artefakte:
+ 
+ 
+| Artefakt | Dissect-Funktion | Forensische Bedeutung |
+| --- | --- | --- |
+| Master File Table | target-query -f mft | Alle Dateien inkl. gelöschter (NTFS) |
+| Registry Hives | target-query -f registry | Windows-Konfiguration, Autostart |
+| Prefetch-Dateien | target-query -f prefetch | Welche Programme wann liefen |
+| LNK-Dateien | target-query -f lnk | Zuletzt geöffnete Dateien |
+| Shellbags | target-query -f shellbags | Besuchte Ordner |
+| Jump Lists | target-query -f jumplist | Zuletzt verwendete Dateien pro App |
+| Browser-History | target-query -f browser | Besuchte Webseiten |
+| SSH-Keys | target-query -f ssh | SSH known_hosts, authorized_keys |
+| Bash-History | target-query -f bash | Eingegebene Befehle |
+| Crontab | target-query -f crontab | Geplante Aufgaben |
+| Benutzerkonten | target-query -f users | Alle Benutzer auf dem System |
+| Netzwerk-Config | target-query -f network | IP-Adressen, Interfaces |
+| SRUM-Datenbank | target-query -f srum | Ressourcen-Nutzung (Windows) |
+| Amcache | target-query -f amcache | Ausgeführte Programme (Windows) |
+ 
+ 
+## Stufe 4.1 — Autopsy (konditionell)
+ 
+ 
+> **Was ist Autopsy?**
+ 
+>
+> Autopsy ist ein forensisches Analyse-Tool (Open Source, Apache 2.0 Lizenz)
+>
+> Es läuft im --headless Modus — kein Fenster, kein GUI, vollständig automatisierbar
+>
+> Python startet Autopsy als Subprocess und liest den XML-Report ein
+>
+> Benötigt Java (JRE) — muss installiert sein: apt install default-jre autopsy
+>
+> Laufzeit: ca. 45 Minuten bei einem 50GB Image — deshalb nur konditionell
+ 
+ 
+ 
+### Entscheidungslogik — wann startet Autopsy?
+ 
+ 
+```
+# stages/stage04_1_autopsy.py
+def should_run_autopsy(ctx: PipelineContext, force: bool = False) -> tuple[bool, str]:
+    if force:
+        return True, 'Manuell erzwungen (--force-autopsy)'
+ 
+    # Bedingung 4.1.1 — Mehr als 100 Bilddateien
+    if ctx.image_count > 100:
+        return True, f'Bedingung 4.1.1: {ctx.image_count} Bilddateien gefunden'
+ 
+    # Bedingung 4.1.2 — E-Mail-Datenbank gefunden
+    if ctx.email_db_found:
+        return True, 'Bedingung 4.1.2: E-Mail-Datenbank gefunden (PST/OST/MBOX)'
+ 
+    # Bedingung 4.1.3 — Verschlüsselte Dateien
+    if ctx.encrypted_count > 0:
+        return True, f'Bedingung 4.1.3: {ctx.encrypted_count} verschlüsselte Dateien'
+ 
+    # Bedingung 4.1.4 — Viele unbekannte Dateitypen
+    if ctx.unknown_ext_count > 50:
+        return True, f'Bedingung 4.1.4: {ctx.unknown_ext_count} unbekannte Dateitypen'
+ 
+    # Bedingung 4.1.5 — Nichts trifft zu
+    return False, 'Bedingung 4.1.5: Keine Bedingung erfüllt — Autopsy übersprungen'
+```
+ 
+ 
+### Autopsy Headless — CLI-Aufruf:
+ 
+ 
+```
+# Schritt 1: Case erstellen
+subprocess.run(['autopsy', '--headless', '--createCase', str(case_dir),
+    '--caseName', 'dfir_case', '--caseType', 'single'])
+ 
+# Schritt 2: Image hinzufügen
+subprocess.run(['autopsy', '--headless', '--addDataSource',
+    '--dataSourcePath', str(ctx.disk_image_path),
+    '--dataSourceType', 'IMAGE', '--caseDir', str(case_dir)])
+ 
+# Schritt 3: Ingest-Module ausführen
+subprocess.run(['autopsy', '--headless', '--runIngest',
+    '--ingestConfig', str(ingest_config), '--caseDir', str(case_dir)])
+ 
+# Schritt 4: Report generieren
+subprocess.run(['autopsy', '--headless', '--generateReport',
+    '--reportType', 'XML', '--reportDir', str(report_dir),
+    '--caseDir', str(case_dir)])
+ 
+# Schritt 5: XML-Report einlesen
+results = parse_autopsy_xml(report_dir / 'report.xml')
+ctx.autopsy_results = results
+ctx.autopsy_ran = True
+```
+ 
+ 
+## Stufe 5 — TSK Fallback + Multi-Partition-Analyse
+ 
+ 
+> **Wann wird TSK aktiv?**
+ 
+>
+> ctx.dissect_empty == True (Dissect hat nichts gefunden)
+>
+> Typische Ursachen: XFS-Dateisystem, Btrfs, korruptes Image, unbekanntes Format
+>
+> TSK übernimmt dann die komplette Dateisystem-Analyse
+>
+> ctx.tsk_fallback_used wird auf True gesetzt
+>
+> ctx.ioc_quality wird auf 'MITTEL' herabgesetzt
+ 
+ 
+ 
+### TSK-Tools die verwendet werden:
+ 
+ 
+| TSK-Tool | Funktion | Ausgabe |
+| --- | --- | --- |
+| mmls | Partitionstabelle lesen | Liste aller Partitionen mit Offset |
+| fsstat | Dateisystem-Info | Dateisystem-Typ, Größe, Cluster |
+| fls | Dateien und Ordner listen | Alle Dateien inkl. gelöschter |
+| icat | Datei-Inhalt extrahieren | Rohdaten einer bestimmten Datei |
+| ils | Inode-Liste | Alle Inodes inkl. freier |
+| tsk_recover | Gelöschte Dateien wiederherstellen | Wiederhergestellte Dateien |
+| mactime | MAC-Timeline erstellen | Zeitlinie aller Dateizugriffe |
+ 
+ 
+### Multi-Partition-Analyse (5.1) — läuft immer:
+ 
+ 
+```
+# stages/stage05_tsk.py
+def analyse_partitions(ctx: PipelineContext):
+    # mmls: Partitionstabelle lesen
+    result = subprocess.run(
+        ['mmls', str(ctx.disk_image_path)],
+        capture_output=True, text=True
+    )
+    partitions = parse_mmls_output(result.stdout)
+ 
+    for partition in partitions:
+        # Jede Partition einzeln analysieren
+        offset = partition['start']
+        fs_type = detect_filesystem(ctx.disk_image_path, offset)
+ 
+        if fs_type in ['ntfs', 'fat32', 'exfat', 'ext4', 'ext3']:
+            analyse_partition_tsk(ctx, offset, fs_type)
+        elif fs_type == 'xfs':
+            analyse_partition_xfs(ctx, offset)  # xfs_db als Fallback
+        else:
+            log.warning(f'Unbekanntes Dateisystem: {fs_type} — übersprungen')
+```
+ 
+ 
+## Stufe 6 — Log-Parsing (38 Parser)
+ 
+ 
+> **Aufgabe dieser Stufe**
+ 
+>
+> stage06_logs.py ist der Manager — er koordiniert alle 38 Parser
 >
 > Für jede Log-Datei im Image wird genau EIN Parser aufgerufen (kein Überschneiden)
 >
@@ -653,7 +827,7 @@ def detect_os_family(ctx: PipelineContext) -> PipelineContext:
 > **Wie der Parser-Router funktioniert**
  
 >
-> 1. stage04_logs.py findet alle Log-Dateien im Image
+> 1. stage06_logs.py findet alle Log-Dateien im Image
 >
 > 2. Für jede Datei: Parser-Router fragt alle 38 Parser der Reihe nach
 >
@@ -743,127 +917,13 @@ class BaseParser(ABC):
 | PlasaFallbackParser | alle unbekannten Formate | Letzter Fallback — Plaso/log2timeline |
  
  
-## Stufe 5 — Disk-Artefakt-Extraktion mit Dissect
- 
- 
-> **Aufgabe dieser Stufe**
- 
->
-> Dissect: Liest das Disk-Image DIREKT (kein Mounten nötig) und extrahiert Artefakte
->
-> Dissect (target-query): Parst MFT, Registry, Prefetch, Browser-Historien und weitere Artefakte
->
-> Setzt ctx.dissect_empty = True falls Dissect nichts findet (TSK Fallback nötig)
->
-> Setzt ctx.image_count, ctx.email_db_found, ctx.encrypted_count für Autopsy-Trigger
- 
- 
- 
-### Dissect — extrahierte Artefakte:
- 
- 
-| Artefakt | Dissect-Funktion | Forensische Bedeutung |
-| --- | --- | --- |
-| Master File Table | target-query -f mft | Alle Dateien inkl. gelöschter (NTFS) |
-| Registry Hives | target-query -f registry | Windows-Konfiguration, Autostart |
-| Prefetch-Dateien | target-query -f prefetch | Welche Programme wann liefen |
-| LNK-Dateien | target-query -f lnk | Zuletzt geöffnete Dateien |
-| Shellbags | target-query -f shellbags | Besuchte Ordner |
-| Jump Lists | target-query -f jumplist | Zuletzt verwendete Dateien pro App |
-| Browser-History | target-query -f browser | Besuchte Webseiten |
-| SSH-Keys | target-query -f ssh | SSH known_hosts, authorized_keys |
-| Bash-History | target-query -f bash | Eingegebene Befehle |
-| Crontab | target-query -f crontab | Geplante Aufgaben |
-| Benutzerkonten | target-query -f users | Alle Benutzer auf dem System |
-| Netzwerk-Config | target-query -f network | IP-Adressen, Interfaces |
-| SRUM-Datenbank | target-query -f srum | Ressourcen-Nutzung (Windows) |
-| Amcache | target-query -f amcache | Ausgeführte Programme (Windows) |
- 
- 
-## Stufe 5.1 — Autopsy (konditionell)
- 
- 
-> **Was ist Autopsy?**
- 
->
-> Autopsy ist ein forensisches Analyse-Tool (Open Source, Apache 2.0 Lizenz)
->
-> Es läuft im --headless Modus — kein Fenster, kein GUI, vollständig automatisierbar
->
-> Python startet Autopsy als Subprocess und liest den XML-Report ein
->
-> Benötigt Java (JRE) — muss installiert sein: apt install default-jre autopsy
->
-> Laufzeit: ca. 45 Minuten bei einem 50GB Image — deshalb nur konditionell
- 
- 
- 
-### Entscheidungslogik — wann startet Autopsy?
- 
- 
-```
-# stages/stage05_1_autopsy.py
-def should_run_autopsy(ctx: PipelineContext, force: bool = False) -> tuple[bool, str]:
-    if force:
-        return True, 'Manuell erzwungen (--force-autopsy)'
- 
-    # Bedingung 4.1.1 — Mehr als 100 Bilddateien
-    if ctx.image_count > 100:
-        return True, f'Bedingung 4.1.1: {ctx.image_count} Bilddateien gefunden'
- 
-    # Bedingung 4.1.2 — E-Mail-Datenbank gefunden
-    if ctx.email_db_found:
-        return True, 'Bedingung 4.1.2: E-Mail-Datenbank gefunden (PST/OST/MBOX)'
- 
-    # Bedingung 4.1.3 — Verschlüsselte Dateien
-    if ctx.encrypted_count > 0:
-        return True, f'Bedingung 4.1.3: {ctx.encrypted_count} verschlüsselte Dateien'
- 
-    # Bedingung 4.1.4 — Viele unbekannte Dateitypen
-    if ctx.unknown_ext_count > 50:
-        return True, f'Bedingung 4.1.4: {ctx.unknown_ext_count} unbekannte Dateitypen'
- 
-    # Bedingung 4.1.5 — Nichts trifft zu
-    return False, 'Bedingung 4.1.5: Keine Bedingung erfüllt — Autopsy übersprungen'
-```
- 
- 
-### Autopsy Headless — CLI-Aufruf:
- 
- 
-```
-# Schritt 1: Case erstellen
-subprocess.run(['autopsy', '--headless', '--createCase', str(case_dir),
-    '--caseName', 'dfir_case', '--caseType', 'single'])
- 
-# Schritt 2: Image hinzufügen
-subprocess.run(['autopsy', '--headless', '--addDataSource',
-    '--dataSourcePath', str(ctx.disk_image_path),
-    '--dataSourceType', 'IMAGE', '--caseDir', str(case_dir)])
- 
-# Schritt 3: Ingest-Module ausführen
-subprocess.run(['autopsy', '--headless', '--runIngest',
-    '--ingestConfig', str(ingest_config), '--caseDir', str(case_dir)])
- 
-# Schritt 4: Report generieren
-subprocess.run(['autopsy', '--headless', '--generateReport',
-    '--reportType', 'XML', '--reportDir', str(report_dir),
-    '--caseDir', str(case_dir)])
- 
-# Schritt 5: XML-Report einlesen
-results = parse_autopsy_xml(report_dir / 'report.xml')
-ctx.autopsy_results = results
-ctx.autopsy_ran = True
-```
- 
- 
-## Stufe 6 — IOC-Extraktion
+## Stufe 7 — IOC-Extraktion
  
  
 > **Warum hier (nicht am Ende)?**
  
 >
-> IOC-Extraktion MUSS vor dem MITRE ATT&CK Mapping (Stufe 9) laufen
+> IOC-Extraktion MUSS vor dem MITRE ATT&CK Mapping (Stufe 11) laufen
 >
 > Das MITRE-Mapping nutzt die extrahierten IOCs um Techniken zuzuordnen
 >
@@ -887,65 +947,6 @@ ctx.autopsy_ran = True
 | E-Mail | [a-zA-Z0-9.]+@[a-zA-Z0-9.]+ | attacker@evil.com |
 | CVE-Nummer | CVE-\d{4}-\d{4,7} | CVE-2021-44228 |
 | Registry-Key | HKEY_[A-Z_]+\\[^\n]+ | HKEY_LOCAL_MACHINE\... |
- 
- 
-## Stufe 7 — TSK Fallback + Multi-Partition-Analyse
- 
- 
-> **Wann wird TSK aktiv?**
- 
->
-> ctx.dissect_empty == True (Dissect hat nichts gefunden)
->
-> Typische Ursachen: XFS-Dateisystem, Btrfs, korruptes Image, unbekanntes Format
->
-> TSK übernimmt dann die komplette Dateisystem-Analyse
->
-> ctx.tsk_fallback_used wird auf True gesetzt
->
-> ctx.ioc_quality wird auf 'MITTEL' herabgesetzt
- 
- 
- 
-### TSK-Tools die verwendet werden:
- 
- 
-| TSK-Tool | Funktion | Ausgabe |
-| --- | --- | --- |
-| mmls | Partitionstabelle lesen | Liste aller Partitionen mit Offset |
-| fsstat | Dateisystem-Info | Dateisystem-Typ, Größe, Cluster |
-| fls | Dateien und Ordner listen | Alle Dateien inkl. gelöschter |
-| icat | Datei-Inhalt extrahieren | Rohdaten einer bestimmten Datei |
-| ils | Inode-Liste | Alle Inodes inkl. freier |
-| tsk_recover | Gelöschte Dateien wiederherstellen | Wiederhergestellte Dateien |
-| mactime | MAC-Timeline erstellen | Zeitlinie aller Dateizugriffe |
- 
- 
-### Multi-Partition-Analyse (5.1) — läuft immer:
- 
- 
-```
-# stages/stage07_tsk.py
-def analyse_partitions(ctx: PipelineContext):
-    # mmls: Partitionstabelle lesen
-    result = subprocess.run(
-        ['mmls', str(ctx.disk_image_path)],
-        capture_output=True, text=True
-    )
-    partitions = parse_mmls_output(result.stdout)
- 
-    for partition in partitions:
-        # Jede Partition einzeln analysieren
-        offset = partition['start']
-        fs_type = detect_filesystem(ctx.disk_image_path, offset)
- 
-        if fs_type in ['ntfs', 'fat32', 'exfat', 'ext4', 'ext3']:
-            analyse_partition_tsk(ctx, offset, fs_type)
-        elif fs_type == 'xfs':
-            analyse_partition_xfs(ctx, offset)  # xfs_db als Fallback
-        else:
-            log.warning(f'Unbekanntes Dateisystem: {fs_type} — übersprungen')
-```
  
  
 ## Stufe 8 — Datennormalisierung
@@ -1160,7 +1161,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
 >
 > Fehler werden in ctx.stage_errors gespeichert und die Pipeline läuft weiter
 >
-> Am Ende zeigt Stufe 11 alle Fehler zusammengefasst
+> Am Ende zeigt Stufe 13 alle Fehler zusammengefasst
  
  
  
@@ -1297,12 +1298,17 @@ sudo apt install default-jre -y
  
 # Forensik-Tools
 sudo apt install sleuthkit -y       # The Sleuth Kit
-pip install dissect                 # Dissect Framework (target-query)
 sudo apt install xfsprogs -y        # xfs_db für XFS-Dateisysteme
  
 # Autopsy installieren
 wget https://github.com/sleuthkit/autopsy/releases/latest
 sudo dpkg -i autopsy_*.deb
+ 
+# Hayabusa installieren (Stage 6.3 — EVTX / Sigma-Regeln)
+sudo mkdir -p /opt/hayabusa
+wget https://github.com/Yamato-Security/hayabusa/releases/latest/download/hayabusa-linux.zip
+unzip hayabusa-linux.zip -d /opt/hayabusa
+chmod +x /opt/hayabusa/hayabusa
  
 # Docker (für Timesketch)
 curl -fsSL https://get.docker.com | sh
@@ -1318,22 +1324,29 @@ sudo usermod -aG docker $USER
 python3.11 -m venv venv
 source venv/bin/activate
  
-# requirements.txt — alle Pakete mit exakten Versionen
-pip install dissect==3.22
-pip install volatility3==2.5.0
-pip install timesketch-api-client==20240101
-pip install scikit-learn==1.4.0
-pip install pandas==2.2.0
-pip install python-magic==0.4.27
-pip install reportlab==4.1.0
-pip install attackcti==0.3.4
-pip install yara-python==4.3.1
-pip install python-dateutil==2.9.0
-pip install pytz==2024.1
-pip install numpy==1.26.4
-pip install duckdb>=0.10.0
-pip install pyyaml==6.0.1
-pip install tqdm>=4.66.0
+# Alle Abhängigkeiten auf einmal installieren
+pip install -r requirements.txt
+ 
+# requirements.txt — Inhalt zur Übersicht:
+# dissect==3.22                    Disk-Forensik Framework
+# volatility3==2.5.0               RAM-Analyse
+# python-evtx==0.7.4               EVTX-Parser
+# construct==2.10.68               Binär-Parser (Abhängigkeit)
+# yara-python==4.3.1               YARA Malware-Signaturen
+# scikit-learn==1.4.0              ML Isolation Forest
+# numpy==1.26.4                    ML Numerik
+# pandas==2.2.0                    Datenverarbeitung
+# python-dateutil==2.9.0           Timestamp-Parsing
+# pytz==2024.1                     Zeitzonen
+# python-magic==0.4.27             Dateityp-Erkennung
+# reportlab==4.1.0                 PDF-Erstellung
+# timesketch-api-client==20240101  Timesketch API
+# attackcti==0.3.4                 MITRE ATT&CK
+# duckdb>=0.10.0                   Events-Datenbank
+# tqdm>=4.66.0                     Fortschrittsanzeige
+# pyyaml==6.0.1                    Konfiguration
+# requests==2.31.0                 HTTP
+# urllib3==2.2.0                   URL-Bibliothek
 ```
  
  
@@ -1371,13 +1384,22 @@ autopsy:
   binary:     '/usr/bin/autopsy'
   java_home:  '/usr/lib/jvm/default-java'
  
+hayabusa:
+  binary:     '/opt/hayabusa/hayabusa'
+  rules_dir:  'data/sigma-rules/rules/windows'
+  min_level:  'medium'
+ 
 ml:
-  contamination: 0.01     # 1% Anomalie-Rate angenommen
-  anomaly_threshold: 0.7  # Ab diesem Score = Anomalie
+  contamination:     0.01      # 1% Anomalie-Rate angenommen
+  anomaly_threshold: 0.7       # Ab diesem Score = Anomalie
+  max_events:        500000    # Max. Events für ML-Analyse
  
 logging:
-  level:      'INFO'      # DEBUG, INFO, WARNING, ERROR
+  level:      'INFO'           # DEBUG, INFO, WARNING, ERROR
   file:       'pipeline.log'
+ 
+output:
+  base_dir:   './output'
 ```
  
  
@@ -1750,7 +1772,7 @@ class BaseParser(ABC):
  
     def make_event(self, timestamp, source, event_type, message,
                    user=None, ip=None, process=None,
-                   file_path=None, severity='info', raw=None) -> ForensicEvent:
+                   file_path=None, severity='info', **_) -> ForensicEvent:
         from utils.timestamp import to_utc
         return ForensicEvent(
             timestamp  = to_utc(str(timestamp)) if not isinstance(timestamp, datetime) else timestamp,
@@ -1762,7 +1784,6 @@ class BaseParser(ABC):
             process    = process,
             file_path  = str(file_path) if file_path else None,
             severity   = severity,
-            raw        = raw or {},
         )
  
     def read_lines(self, path: Path) -> List[str]:
@@ -1926,6 +1947,14 @@ class AuthLogParser(BaseParser):
                 events.append(self.make_event(ts, 'auth', 'user_created',
                     f'Neuer Benutzer erstellt: {m[1]}',
                     user=m[1], severity='high'))
+                continue
+
+            # User gelöscht
+            m = USER_DEL.search(msg)
+            if m:
+                events.append(self.make_event(ts, 'auth', 'user_deleted',
+                    f'Benutzer gelöscht: {m[1]}',
+                    user=m[1].strip(), severity='high'))
         return events
 ```
  
@@ -2448,7 +2477,7 @@ class ApacheErrorParser(BaseParser):
     file_patterns = ['error.log', 'error_log']
  
     def can_parse(self, path: Path) -> bool:
-        return 'error' in path.name
+        return 'error' in path.name and 'apache' in str(path).lower()
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
@@ -2664,13 +2693,10 @@ class MongoDBParser(BaseParser):
 ```
 # parsers/audit_parser.py
 AUDIT_PATTERN = re.compile(
-    r'^type=(?P<type>\S+)\s+msg=audit\((?P<ts>[\d.]+):\d+\):\s+(?P<rest>.+)$'
+    r'^type=(?P<type>\S+)\s+msg=audit\((?P<ts>[\d.]+):\d+\):\s+(?P<msg>.+)$'
 )
-AUDIT_CRITICAL_TYPES = [
-    'EXECVE','SYSCALL','USER_AUTH','USER_LOGIN','USER_CMD',
-    'CRED_ACQ','CRED_DISP','ADD_USER','DEL_USER','MOD_USER',
-    'ANOM_EXEC','ANOM_MK_EXE','ANOM_PROMISCUOUS',
-]
+HIGH_TYPES = {'EXECVE', 'SYSCALL', 'USER_AUTH', 'USER_LOGIN', 'USER_CMD',
+              'ADD_USER', 'DEL_USER', 'ADD_GROUP', 'DEL_GROUP'}
  
 class AuditParser(BaseParser):
     name = 'audit'
@@ -2684,17 +2710,15 @@ class AuditParser(BaseParser):
         for line in self.read_lines(path):
             m = AUDIT_PATTERN.match(line)
             if not m: continue
-            audit_type = m['type']
-            if audit_type not in AUDIT_CRITICAL_TYPES: continue
-            ts = datetime.fromtimestamp(float(m['ts']), tz=timezone.utc)
-            # Key-Value aus rest parsen
-            kv = dict(re.findall(r'(\w+)=(\S+)', m['rest']))
-            sev = 'high' if audit_type.startswith('ANOM') else 'medium'
+            atype = m['type']
+            try:
+                ts = datetime.fromtimestamp(float(m['ts']), tz=timezone.utc)
+            except (ValueError, OSError):
+                ts = m['ts']
+            sev = 'high' if atype in HIGH_TYPES else 'info'
             events.append(self.make_event(
-                ts, 'audit', audit_type.lower(),
-                f'Audit {audit_type}: {m["rest"][:200]}',
-                user=kv.get('auid'), process=kv.get('exe'),
-                severity=sev, raw=kv
+                ts, 'audit', f'audit_{atype.lower()}', m['msg'],
+                severity=sev, raw={'audit_type': atype}
             ))
         return events
 ```
@@ -2738,11 +2762,10 @@ class Fail2BanParser(BaseParser):
  
 ```
 # parsers/ufw_parser.py
-# Format: Eingebettet in syslog/kern.log
-# Erkennungsmuster: '[UFW BLOCK]' oder '[UFW ALLOW]'
-UFW_PATTERN = re.compile(
-    r'\[UFW (?P<action>\w+)\].*SRC=(?P<src>[\d.]+).*DST=(?P<dst>[\d.]+)'
-    r'.*(?:SPT=(?P<sport>\d+))?.*(?:DPT=(?P<dport>\d+))?'
+# Format: Eingebettet in syslog — Timestamp aus Syslog-Basispattern
+from parsers.syslog_parser import PATTERN as SYSLOG_PATTERN
+UFW_RE = re.compile(
+    r'\[UFW\s+(?P<action>BLOCK|ALLOW|LIMIT)\]\s+.*?SRC=(?P<src>[\d.]+).*?DST=(?P<dst>[\d.]+)'
 )
  
 class UFWParser(BaseParser):
@@ -2754,16 +2777,20 @@ class UFWParser(BaseParser):
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
+        year = datetime.now().year
         for line in self.read_lines(path):
-            m = UFW_PATTERN.search(line)
-            if not m: continue
-            action = m['action']
-            sev = 'medium' if action == 'BLOCK' else 'info'
+            m_base = SYSLOG_PATTERN.match(line)
+            if not m_base: continue
+            msg = m_base['msg']
+            mu  = UFW_RE.search(msg)
+            if not mu: continue
+            action = mu['action']
+            sev    = 'high' if action == 'BLOCK' else 'info'
             events.append(self.make_event(
-                datetime.now(tz=timezone.utc),  # Aus Syslog-Teil extrahieren
-                'ufw', f'ufw_{action.lower()}',
-                f'UFW {action}: {m["src"]}:{m["sport"]} → {m["dst"]}:{m["dport"]}',
-                ip=m['src'], severity=sev
+                f'{year} {m_base["month"]} {m_base["day"]} {m_base["time"]}',
+                'ufw', f'fw_{action.lower()}',
+                f'UFW {action}: SRC={mu["src"]} DST={mu["dst"]}',
+                ip=mu['src'], severity=sev
             ))
         return events
 ```
@@ -2775,10 +2802,10 @@ class UFWParser(BaseParser):
 ```
 # parsers/cron_parser.py
 # Pfad: /var/log/cron, /var/log/cron.log, eingebettet in syslog
-# Erkennt: neue Jobs, ausgeführte Jobs, Fehler
-CRON_EXEC = re.compile(r'\((?P<user>\S+)\) CMD \((?P<cmd>.+)\)')
-CRON_EDIT = re.compile(r'\((?P<user>\S+)\) (BEGIN|END) EDIT')
-CRON_NEW  = re.compile(r'\((?P<user>\S+)\) (LIST|REPLACE)')
+from parsers.syslog_parser import PATTERN as SYSLOG_PATTERN
+CRON_CMD = re.compile(r'CMD\s+\((.+)\)')
+SUSPICIOUS_CMDS = ['wget', 'curl', 'nc ', 'ncat', 'bash -i', '/tmp/', 'python -c',
+                   'perl -e', 'ruby -e', 'base64', 'chmod +x']
  
 class CronParser(BaseParser):
     name = 'cron'
@@ -2789,21 +2816,24 @@ class CronParser(BaseParser):
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
-        SUSPICIOUS_CMDS = ['/tmp','/dev/shm','wget','curl','nc','bash -i',
-                           'python -c','perl -e','ruby -e','php -r']
+        year = datetime.now().year
         for line in self.read_lines(path):
-            m_base = PATTERN.match(line)  # Syslog-Basis
+            m_base = SYSLOG_PATTERN.match(line)
             if not m_base: continue
             msg = m_base['msg']
-            ts  = f'{datetime.now().year} {m_base["month"]} {m_base["day"]} {m_base["time"]}'
-            m = CRON_EXEC.search(msg)
-            if m:
-                cmd = m['cmd']
-                sev = 'high' if any(s in cmd for s in SUSPICIOUS_CMDS) else 'info'
+            ts  = f'{year} {m_base["month"]} {m_base["day"]} {m_base["time"]}'
+            mc  = CRON_CMD.search(msg)
+            if mc:
+                cmd = mc.group(1)
+                sev = 'high' if any(s in cmd.lower() for s in SUSPICIOUS_CMDS) else 'info'
                 events.append(self.make_event(
-                    ts, 'cron', 'cron_exec',
-                    f'Cron-Job ausgeführt: User={m["user"]} CMD={cmd}',
-                    user=m['user'], severity=sev
+                    ts, 'cron', 'cron_cmd', f'Cron CMD: {cmd}',
+                    process='cron', severity=sev
+                ))
+            else:
+                events.append(self.make_event(
+                    ts, 'cron', 'cron_event', msg,
+                    process=m_base['process'], severity='info'
                 ))
         return events
 ```
@@ -2820,13 +2850,10 @@ class CronParser(BaseParser):
 ```
 # parsers/bash_history_parser.py
 # Pfad: /home/*/.bash_history, /root/.bash_history
-# Format: Eine Zeile = ein Befehl (kein Timestamp in Standard-Bash)
-# Mit Timestamp: '#1650000000
- command'
-BASH_TS = re.compile(r'^#(?P<ts>\d{10})$')
-SUSPICIOUS = ['wget','curl','nc ','ncat','socat','chmod 777',
-              '/tmp/','base64 -d','eval','exec','rm -rf',
-              'dd if=','python -c','perl -e','pkill','kill -9']
+# Mit Timestamp-Header: '#1650000000' gefolgt von Befehl
+TS_LINE = re.compile(r'^#(\d+)$')
+SUSPICIOUS = ['wget', 'curl', 'nc ', 'ncat', 'bash -i', 'python -c',
+              'perl -e', 'chmod +x', 'base64', 'sudo su', '/tmp/']
  
 class BashHistoryParser(BaseParser):
     name = 'bash_history'
@@ -2837,21 +2864,34 @@ class BashHistoryParser(BaseParser):
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
-        lines = self.read_lines(path)
-        current_ts = None
-        for line in lines:
-            m = BASH_TS.match(line)
-            if m:
-                current_ts = datetime.fromtimestamp(int(m['ts']), tz=timezone.utc)
+        lines  = self.read_lines(path)
+        ts     = datetime.now(tz=timezone.utc)
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if not line:
+                i += 1
                 continue
-            if not line.strip(): continue
-            ts = current_ts or datetime.now(tz=timezone.utc)
-            sev = 'high' if any(s in line for s in SUSPICIOUS) else 'info'
-            # User aus Pfad extrahieren: /home/USERNAME/.bash_history
-            user = path.parts[-2] if len(path.parts) >= 2 else 'unknown'
+            m = TS_LINE.match(line)
+            if m:
+                try:
+                    ts = datetime.fromtimestamp(int(m.group(1)), tz=timezone.utc)
+                except (ValueError, OSError):
+                    pass
+                i += 1
+                if i < len(lines):
+                    cmd = lines[i].strip()
+                    i += 1
+                else:
+                    continue
+            else:
+                cmd = line
+                i += 1
+            if not cmd: continue
+            sev = 'high' if any(s in cmd.lower() for s in SUSPICIOUS) else 'info'
             events.append(self.make_event(
-                ts, 'bash_history', 'shell_command', line.strip(),
-                user=user, severity=sev
+                ts, 'bash_history', 'shell_command', cmd,
+                process='bash', severity=sev
             ))
         return events
 ```
@@ -2864,9 +2904,11 @@ class BashHistoryParser(BaseParser):
 # parsers/zsh_history_parser.py
 # Pfad: /home/*/.zsh_history
 # Format: ': timestamp:0;command' oder nur 'command'
-ZSH_PATTERN = re.compile(r'^: (?P<ts>\d+):\d+;(?P<cmd>.+)$')
+ZSH_EXTENDED = re.compile(r'^: (\d+):\d+;(.+)$')
+SUSPICIOUS = ['wget', 'curl', 'nc ', 'ncat', 'bash -i', 'python -c',
+              'perl -e', 'chmod +x', 'base64', 'sudo su', '/tmp/']
  
-class ZshHistoryParser(BashHistoryParser):  # Erbt Suspicious-Liste
+class ZshHistoryParser(BaseParser):
     name = 'zsh_history'
     file_patterns = ['.zsh_history']
  
@@ -2875,20 +2917,22 @@ class ZshHistoryParser(BashHistoryParser):  # Erbt Suspicious-Liste
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
-        user = path.parts[-2] if len(path.parts) >= 2 else 'unknown'
         for line in self.read_lines(path):
-            m = ZSH_PATTERN.match(line)
+            m = ZSH_EXTENDED.match(line)
             if m:
-                ts  = datetime.fromtimestamp(int(m['ts']), tz=timezone.utc)
-                cmd = m['cmd']
+                try:
+                    ts = datetime.fromtimestamp(int(m.group(1)), tz=timezone.utc)
+                except (ValueError, OSError):
+                    ts = datetime.now(tz=timezone.utc)
+                cmd = m.group(2).strip()
             else:
                 ts  = datetime.now(tz=timezone.utc)
                 cmd = line.strip()
             if not cmd: continue
-            sev = 'high' if any(s in cmd for s in self.SUSPICIOUS) else 'info'
+            sev = 'high' if any(s in cmd.lower() for s in SUSPICIOUS) else 'info'
             events.append(self.make_event(
                 ts, 'zsh_history', 'shell_command', cmd,
-                user=user, severity=sev
+                process='zsh', severity=sev
             ))
         return events
 ```
@@ -2900,8 +2944,12 @@ class ZshHistoryParser(BashHistoryParser):  # Erbt Suspicious-Liste
 ```
 # parsers/fish_history_parser.py
 # Pfad: /home/*/.local/share/fish/fish_history
-# Format: YAML-ähnlich: '- cmd: command
-  when: timestamp'
+# Format: '- cmd: command' gefolgt von '  when: timestamp'
+CMD_RE = re.compile(r'^- cmd:\s+(.+)$')
+TS_RE  = re.compile(r'^\s+when:\s+(\d+)$')
+SUSPICIOUS = ['wget', 'curl', 'nc ', 'ncat', 'bash -i', 'python -c',
+              'perl -e', 'chmod +x', 'base64', 'sudo su', '/tmp/']
+ 
 class FishHistoryParser(BaseParser):
     name = 'fish_history'
     file_patterns = ['fish_history']
@@ -2911,18 +2959,27 @@ class FishHistoryParser(BaseParser):
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
-        content = path.read_text(errors='replace')
-        # Einträge parsen: '- cmd: ...' gefolgt von '  when: ...'
-        entries = re.findall(r'- cmd: (.+?)
-\s+when: (\d+)', content, re.DOTALL)
-        user = path.parts[-5] if len(path.parts) >= 5 else 'unknown'
-        for cmd, ts_str in entries:
-            ts  = datetime.fromtimestamp(int(ts_str), tz=timezone.utc)
-            sev = 'high' if any(s in cmd for s in SUSPICIOUS) else 'info'
-            events.append(self.make_event(
-                ts, 'fish_history', 'shell_command', cmd.strip(),
-                user=user, severity=sev
-            ))
+        lines  = self.read_lines(path)
+        i = 0
+        while i < len(lines):
+            mc = CMD_RE.match(lines[i])
+            if mc:
+                cmd = mc.group(1).strip()
+                ts  = datetime.now(tz=timezone.utc)
+                if i + 1 < len(lines):
+                    mt = TS_RE.match(lines[i + 1])
+                    if mt:
+                        try:
+                            ts = datetime.fromtimestamp(int(mt.group(1)), tz=timezone.utc)
+                        except (ValueError, OSError):
+                            pass
+                        i += 1
+                sev = 'high' if any(s in cmd.lower() for s in SUSPICIOUS) else 'info'
+                events.append(self.make_event(
+                    ts, 'fish_history', 'shell_command', cmd,
+                    process='fish', severity=sev
+                ))
+            i += 1
         return events
 ```
  
@@ -2960,34 +3017,45 @@ class UtmpParser(WtmpParser):
 ```
 # parsers/ssh_parser.py
 # SSH-Events sind in auth.log eingebettet — dieser Parser ist spezialisiert
-# Erkennt zusätzlich: Port-Forwarding, Tunnel, X11-Forwarding
-SSH_PATTERNS = {
-    'accepted':   re.compile(r'Accepted (\S+) for (\S+) from ([\d.]+) port (\d+)'),
-    'failed':     re.compile(r'Failed (\S+) for (\S+) from ([\d.]+) port (\d+)'),
-    'disconnect': re.compile(r'Disconnected from (\S+) ([\d.]+) port (\d+)'),
-    'tunnel':     re.compile(r'Accepted.*port.*forwarding'),
-    'x11':        re.compile(r'X11 forwarding request failed'),
-    'invalid':    re.compile(r'Invalid user (\S+) from ([\d.]+)'),
-    'bruteforce': re.compile(r'message repeated (\d+) times'),
-}
+from parsers.syslog_parser import PATTERN as SYSLOG_PATTERN
+SSH_ACCEPT  = re.compile(r'Accepted (password|publickey) for (\S+) from ([\d.]+)')
+SSH_FAIL    = re.compile(r'Failed (password|publickey) for (\S+) from ([\d.]+)')
+SSH_INVALID = re.compile(r'Invalid user (\S+) from ([\d.]+)')
+SSH_TUNNEL  = re.compile(r'Received disconnect')
+SSH_X11     = re.compile(r'X11 forwarding')
  
 class SSHParser(BaseParser):
     name = 'ssh'
-    file_patterns = ['auth.log', 'secure']  # Aus diesen Dateien
+    file_patterns = ['auth.log', 'secure']
+ 
+    def can_parse(self, path: Path) -> bool:
+        return path.name.startswith(('auth.log', 'secure'))
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
+        year = datetime.now().year
         for line in self.read_lines(path):
-            if 'sshd' not in line: continue  # Nur SSH-Zeilen
-            for event_type, pattern in SSH_PATTERNS.items():
-                m = pattern.search(line)
+            if 'sshd' not in line: continue
+            m_base = SYSLOG_PATTERN.match(line)
+            if not m_base: continue
+            msg = m_base['msg']
+            ts  = f'{year} {m_base["month"]} {m_base["day"]} {m_base["time"]}'
+            for pattern, etype, sev in [
+                (SSH_ACCEPT,  'ssh_success', 'medium'),
+                (SSH_FAIL,    'ssh_fail',    'high'),
+                (SSH_INVALID, 'ssh_invalid', 'high'),
+            ]:
+                m = pattern.search(msg)
                 if m:
-                    sev = 'high' if event_type in ('failed','invalid','bruteforce') else 'medium'
                     events.append(self.make_event(
-                        datetime.now(tz=timezone.utc), 'ssh', f'ssh_{event_type}',
-                        line.strip(), severity=sev
+                        ts, 'ssh', etype, msg,
+                        ip=m.group(3) if len(m.groups()) >= 3 else m.group(2),
+                        severity=sev
                     ))
                     break
+            else:
+                if SSH_TUNNEL.search(msg) or SSH_X11.search(msg):
+                    events.append(self.make_event(ts, 'ssh', 'ssh_misc', msg, severity='info'))
         return events
 ```
  
@@ -2998,34 +3066,40 @@ class SSHParser(BaseParser):
 ```
 # parsers/postfix_parser.py
 # Pfad: /var/log/mail.log, /var/log/maillog
-# Format: Syslog-Basis + Postfix-spezifische Felder
-POSTFIX_STATUS = re.compile(
-    r'status=(?P<status>\w+).*to=<(?P<to>[^>]+)>.*from=<(?P<from>[^>]*)>'
-)
+from parsers.syslog_parser import PATTERN as SYSLOG_PATTERN
+MAIL_FROM = re.compile(r'from=<([^>]+)>')
+MAIL_TO   = re.compile(r'to=<([^>]+)>')
+MAIL_STS  = re.compile(r'status=(\S+)')
  
 class PostfixMailParser(BaseParser):
     name = 'postfix'
-    file_patterns = ['mail.log', 'maillog']
+    file_patterns = ['mail.log', 'maillog', 'mail.log.*']
  
     def can_parse(self, path: Path) -> bool:
         return path.name.startswith(('mail.log', 'maillog'))
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
+        year = datetime.now().year
         for line in self.read_lines(path):
-            if 'postfix' not in line.lower(): continue
-            m_base = PATTERN.match(line)
+            m_base = SYSLOG_PATTERN.match(line)
             if not m_base: continue
             msg = m_base['msg']
-            m = POSTFIX_STATUS.search(msg)
-            if m:
-                sev = 'high' if m['status'] == 'bounced' else 'info'
-                events.append(self.make_event(
-                    f'{datetime.now().year} {m_base["month"]} {m_base["day"]} {m_base["time"]}',
-                    'postfix', f'mail_{m["status"]}',
-                    f'Mail: {m["from"]} → {m["to"]} Status={m["status"]}',
-                    severity=sev
-                ))
+            ts  = f'{year} {m_base["month"]} {m_base["day"]} {m_base["time"]}'
+            mf  = MAIL_FROM.search(msg)
+            mt  = MAIL_TO.search(msg)
+            ms  = MAIL_STS.search(msg)
+            sev = 'high' if ms and ms.group(1) in ('bounced', 'deferred') else 'info'
+            events.append(self.make_event(
+                ts, 'postfix', 'mail_event',
+                f'Mail: {msg[:200]}',
+                severity=sev,
+                raw={
+                    'from':   mf.group(1) if mf else '',
+                    'to':     mt.group(1) if mt else '',
+                    'status': ms.group(1) if ms else '',
+                }
+            ))
         return events
 ```
  
@@ -3069,28 +3143,28 @@ class FTPParser(BaseParser):
 ```
 # parsers/samba_parser.py
 # Pfad: /var/log/samba/log.smbd, /var/log/samba/log.nmbd
-# Format: '[YYYY/MM/DD hh:mm:ss.ms, N] source(file:line) message'
-SAMBA_PATTERN = re.compile(
-    r'^\[(?P<ts>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d+),\s*\d+\]'
-    r'\s+\S+\s+(?P<msg>.+)$'
-)
+SAMBA_TS = re.compile(r'\[(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d+)\]')
+SAMBA_IP = re.compile(r'(?:from|IP)\s+([\d.]+)')
  
 class SambaParser(BaseParser):
     name = 'samba'
     file_patterns = ['samba/log.*', 'log.smbd', 'log.nmbd']
  
     def can_parse(self, path: Path) -> bool:
-        return 'samba' in str(path).lower() or path.name.startswith('log.')
+        return 'samba' in str(path).lower() or path.name.startswith('log.s')
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
         for line in self.read_lines(path):
-            m = SAMBA_PATTERN.match(line)
-            if not m: continue
-            sev = 'high' if 'error' in m['msg'].lower() else 'info'
-            events.append(self.make_event(
-                m['ts'], 'samba', 'smb_event', m['msg'], severity=sev
-            ))
+            mt = SAMBA_TS.search(line)
+            ts = mt.group(1) if mt else ''
+            mi = SAMBA_IP.search(line)
+            ip = mi.group(1) if mi else None
+            sev = 'high' if any(w in line.lower() for w in ['failed', 'error', 'denied']) else 'info'
+            msg = re.sub(r'\[.*?\]', '', line).strip()
+            if msg:
+                events.append(self.make_event(ts, 'samba', 'smb_event', msg,
+                    ip=ip, severity=sev))
         return events
 ```
  
@@ -3101,14 +3175,14 @@ class SambaParser(BaseParser):
 ```
 # parsers/openvpn_parser.py
 # Pfad: /var/log/openvpn.log, /var/log/openvpn/
-# Format: 'YYYY-MM-DD hh:mm:ss message'
-VPN_PATTERN = re.compile(
-    r'^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(?P<msg>.+)$'
-)
+VPN_TS  = re.compile(r'^(?P<ts>\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})')
+VPN_IP  = re.compile(r'([\d.]+):\d+')
+VPN_CON = re.compile(r'(?:Peer Connection Initiated|CONNECTED|Authenticated)')
+VPN_DIS = re.compile(r'(?:SIGTERM|process exiting|peer did not respond)')
  
 class OpenVPNParser(BaseParser):
     name = 'openvpn'
-    file_patterns = ['openvpn.log', 'openvpn/*.log']
+    file_patterns = ['openvpn.log', 'openvpn.log.*']
  
     def can_parse(self, path: Path) -> bool:
         return 'openvpn' in path.name.lower()
@@ -3116,13 +3190,19 @@ class OpenVPNParser(BaseParser):
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
         for line in self.read_lines(path):
-            m = VPN_PATTERN.match(line)
-            if not m: continue
-            msg = m['msg']
-            sev = 'high' if 'TLS Error' in msg or 'AUTH_FAILED' in msg else 'info'
-            events.append(self.make_event(
-                m['ts'], 'openvpn', 'vpn_event', msg, severity=sev
-            ))
+            mt = VPN_TS.match(line)
+            ts = mt.group('ts') if mt else ''
+            mi = VPN_IP.search(line)
+            ip = mi.group(1) if mi else None
+            if VPN_CON.search(line):
+                events.append(self.make_event(ts, 'openvpn', 'vpn_connect',
+                    line.strip(), ip=ip, severity='medium'))
+            elif VPN_DIS.search(line):
+                events.append(self.make_event(ts, 'openvpn', 'vpn_disconnect',
+                    line.strip(), ip=ip, severity='info'))
+            elif 'error' in line.lower() or 'failed' in line.lower():
+                events.append(self.make_event(ts, 'openvpn', 'vpn_error',
+                    line.strip(), ip=ip, severity='high'))
         return events
 ```
  
@@ -3142,26 +3222,26 @@ class OpenVPNParser(BaseParser):
  
 class DockerParser(BaseParser):
     name = 'docker'
-    file_patterns = ['*-json.log']
+    file_patterns = ['containers/*-json.log']
  
     def can_parse(self, path: Path) -> bool:
-        return path.name.endswith('-json.log') or 'docker' in str(path)
+        return path.suffix == '.log' and 'containers' in str(path).lower()
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
         for line in self.read_lines(path):
             try:
-                entry = json.loads(line)
-                ts  = entry.get('time', '')
-                msg = entry.get('log', '').strip()
+                entry  = json.loads(line)
+                ts     = entry.get('time', '')
+                msg    = entry.get('log', '').strip()
+                stream = entry.get('stream', 'stdout')
                 if not msg: continue
-                # Container-ID aus Pfad
-                container_id = path.parent.name[:12]
+                sev = 'high' if any(w in msg.lower() for w in ['error', 'fatal', 'panic']) else 'info'
                 events.append(self.make_event(
                     ts, 'docker', 'container_log', msg,
-                    process=f'container:{container_id}', severity='info'
+                    severity=sev, raw={'stream': stream}
                 ))
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, AttributeError):
                 continue
         return events
 ```
@@ -3173,7 +3253,10 @@ class DockerParser(BaseParser):
 ```
 # parsers/containerd_parser.py
 # Pfad: /var/log/containerd.log
-# Format: JSON-Lines (ähnlich Docker)
+# Format: JSON-Lines oder 'time="..." level=... msg="..."'
+CONTAINERD_RE = re.compile(
+    r'^time="(?P<ts>[^"]+)"\s+level=(?P<level>\w+)\s+msg="(?P<msg>[^"]+)"'
+)
  
 class ContainerdParser(BaseParser):
     name = 'containerd'
@@ -3184,18 +3267,23 @@ class ContainerdParser(BaseParser):
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
+        LEVEL_MAP = {'error':'high','warning':'medium','warn':'medium',
+                     'info':'info','debug':'info'}
         for line in self.read_lines(path):
             try:
                 entry = json.loads(line)
                 ts  = entry.get('time', entry.get('ts', ''))
                 msg = entry.get('msg', '')
-                lvl = entry.get('level', 'info')
-                sev = 'high' if lvl in ('error','fatal') else 'info'
-                events.append(self.make_event(
-                    ts, 'containerd', 'container_event', msg, severity=sev
-                ))
-            except json.JSONDecodeError:
-                continue
+                lvl = entry.get('level', 'info').lower()
+            except (json.JSONDecodeError, AttributeError):
+                m = CONTAINERD_RE.match(line)
+                if not m: continue
+                ts, lvl, msg = m['ts'], m['level'].lower(), m['msg']
+            if not msg: continue
+            events.append(self.make_event(
+                ts, 'containerd', 'runtime_event', msg,
+                severity=LEVEL_MAP.get(lvl, 'info')
+            ))
         return events
 ```
  
@@ -3206,33 +3294,45 @@ class ContainerdParser(BaseParser):
 ```
 # parsers/iis_parser.py
 # Pfad: C:/inetpub/logs/LogFiles/**/*.log
-# Format: W3C Extended Log Format
-# Beispiel: '2026-04-22 09:15:33 192.168.1.1 GET /path - 80 - 1.2.3.4 ... 200'
-IIS_PATTERN = re.compile(
-    r'^(?P<date>\d{4}-\d{2}-\d{2})\s+(?P<time>\d{2}:\d{2}:\d{2})'
-    r'\s+(?P<server>[\d.]+)\s+(?P<method>\S+)\s+(?P<path>\S+)'
-    r'.*?(?P<client>[\d.]+).*?(?P<status>\d{3})'
-)
+# Format: W3C Extended — Felder dynamisch aus '#Fields:'-Header lesen
+SUSPICIOUS_PATHS = ['/etc/passwd', '../', '..%2f', 'cmd.exe', 'powershell',
+                    '/.env', '/.git', 'union+select', 'exec(']
  
 class IISLogParser(BaseParser):
     name = 'iis'
-    file_patterns = ['u_ex*.log']  # IIS-typisches Namensmuster
+    file_patterns = ['u_ex*.log']
  
     def can_parse(self, path: Path) -> bool:
         return path.name.startswith('u_ex') and path.suffix == '.log'
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
+        fields = []
         for line in self.read_lines(path):
-            if line.startswith('#'): continue  # Header-Zeilen
-            m = IIS_PATTERN.match(line)
-            if not m: continue
-            status = int(m['status'])
-            sev = 'high' if status >= 500 else 'medium' if status >= 400 else 'info'
+            if line.startswith('#Fields:'):
+                fields = line[8:].strip().split()
+                continue
+            if line.startswith('#'): continue
+            parts = line.split()
+            if not fields or len(parts) < len(fields): continue
+            row    = dict(zip(fields, parts))
+            ts     = f'{row.get("date","")} {row.get("time","")}'
+            cs_uri = row.get('cs-uri-stem', '')
+            status = row.get('sc-status', '200')
+            ip     = row.get('c-ip', '')
+            try:
+                st = int(status)
+            except ValueError:
+                st = 200
+            if st >= 500: sev = 'high'
+            elif st >= 400: sev = 'medium'
+            elif any(s in cs_uri.lower() for s in SUSPICIOUS_PATHS): sev = 'high'
+            else: sev = 'info'
             events.append(self.make_event(
-                f'{m["date"]} {m["time"]}', 'iis', 'http_request',
-                f'{m["method"]} {m["path"]} → {status}',
-                ip=m['client'], severity=sev
+                ts, 'iis', 'http_request',
+                f'{row.get("cs-method","GET")} {cs_uri} → {status}',
+                ip=ip, severity=sev,
+                raw={'status': status, 'path': cs_uri}
             ))
         return events
 ```
@@ -3244,8 +3344,10 @@ class IISLogParser(BaseParser):
 ```
 # parsers/evtx_parser.py
 # EVTX wird NICHT direkt geparst — Hayabusa übernimmt das
-# Dieser Parser liest den Hayabusa-Output (JSONL) ein
-import subprocess, json
+import subprocess, json, tempfile, os
+ 
+LEVEL_MAP = {'critical':'critical','high':'high','medium':'medium',
+             'low':'info','informational':'info'}
  
 class EVTXParser(BaseParser):
     name = 'evtx'
@@ -3257,39 +3359,53 @@ class EVTXParser(BaseParser):
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
-        output_file = path.with_suffix('.jsonl')
-        # Hayabusa aufrufen
-        try:
-            subprocess.run([
-                '/opt/hayabusa/hayabusa', 'json-timeline',
-                '--file', str(path),
-                '--output', str(output_file),
-                '--min-level', 'medium',
-                '--no-wizard',
-            ], capture_output=True, timeout=300)
-        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            log.warning(f'Hayabusa fehlgeschlagen: {e}')
+        hayabusa = self._find_hayabusa()
+        if not hayabusa:
+            log.warning('Hayabusa nicht gefunden — EVTX übersprungen')
             return []
-        # Hayabusa-Output einlesen
-        if output_file.exists():
-            for line in output_file.read_text().splitlines():
-                try:
-                    entry = json.loads(line)
-                    ts    = entry.get('Timestamp', '')
-                    msg   = entry.get('Details', '')
-                    level = entry.get('Level', 'info')
-                    rule  = entry.get('RuleTitle', '')
-                    LEVEL_MAP = {'critical':'critical','high':'high',
-                                 'medium':'medium','low':'info','informational':'info'}
-                    events.append(self.make_event(
-                        ts, 'evtx', 'windows_event',
-                        f'{rule}: {msg}',
-                        severity=LEVEL_MAP.get(level.lower(), 'info'),
-                        raw=entry
-                    ))
-                except json.JSONDecodeError:
-                    continue
+        with tempfile.NamedTemporaryFile(suffix='.jsonl', delete=False) as tmp:
+            out_file = tmp.name
+        try:
+            subprocess.run(
+                [hayabusa, 'json-timeline', '--file', str(path),
+                 '--output', out_file, '--no-wizard', '--quiet'],
+                capture_output=True, timeout=600
+            )
+            if not Path(out_file).exists():
+                return []
+            with open(out_file, 'r', errors='replace') as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+                        ts  = entry.get('Timestamp', '')
+                        msg = entry.get('Details', entry.get('RuleTitle', ''))
+                        lvl = entry.get('Level', 'informational').lower()
+                        events.append(self.make_event(
+                            ts, 'evtx', 'windows_event', str(msg),
+                            severity=LEVEL_MAP.get(lvl, 'info'),
+                            raw=entry
+                        ))
+                    except (json.JSONDecodeError, AttributeError):
+                        continue
+        finally:
+            try:
+                os.unlink(out_file)
+            except OSError:
+                pass
         return events
+ 
+    def _find_hayabusa(self):
+        for candidate in ['/opt/hayabusa/hayabusa', './hayabusa', 'hayabusa']:
+            p = Path(candidate)
+            if p.exists():
+                return str(p)
+        try:
+            result = subprocess.run(['which', 'hayabusa'], capture_output=True, text=True)
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except FileNotFoundError:
+            pass
+        return None
 ```
  
  
@@ -3299,38 +3415,59 @@ class EVTXParser(BaseParser):
 ```
 # parsers/plaso_parser.py
 # LETZTER FALLBACK — wenn kein anderer Parser die Datei erkennt
-# Plaso kann fast alle Log-Formate lesen
 import subprocess, json
  
 class PlasaFallbackParser(BaseParser):
     name = 'plaso_fallback'
-    file_patterns = ['*']  # Alles was sonst niemand parst
+    file_patterns = ['*']
  
     def can_parse(self, path: Path) -> bool:
-        return True  # Immer als Fallback
+        return True  # Fallback — nimmt alles
  
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
-        storage = path.with_suffix('.plaso')
         try:
-            subprocess.run(['log2timeline.py', str(storage), str(path)],
-                capture_output=True, timeout=600)
             result = subprocess.run(
-                ['psort.py', '--output-format', 'json', str(storage)],
+                ['log2timeline.py', '--status_view', 'none',
+                 '--logfile', '/dev/null', '/tmp/plaso_out.plaso', str(path)],
+                capture_output=True, timeout=300
+            )
+            if result.returncode != 0:
+                raise RuntimeError('log2timeline fehlgeschlagen')
+            psort = subprocess.run(
+                ['psort.py', '-o', 'json_line', '/tmp/plaso_out.plaso'],
                 capture_output=True, text=True, timeout=300
             )
-            for line in result.stdout.splitlines():
+            for line in psort.stdout.splitlines():
                 try:
                     entry = json.loads(line)
                     events.append(self.make_event(
-                        entry.get('datetime',''), 'plaso',
-                        entry.get('data_type','unknown'),
-                        entry.get('message',''),
+                        entry.get('datetime', ''), 'plaso',
+                        entry.get('source_long', 'plaso'),
+                        entry.get('message', ''),
                         severity='info', raw=entry
                     ))
-                except: continue
-        except Exception as e:
-            log.warning(f'Plaso Fallback fehlgeschlagen: {e}')
+                except (json.JSONDecodeError, AttributeError):
+                    continue
+        except (FileNotFoundError, subprocess.TimeoutExpired, RuntimeError) as e:
+            log.debug(f'Plaso nicht verfügbar oder Fehler: {e}')
+            events = self._text_fallback(path)
+        return events
+ 
+    def _text_fallback(self, path: Path) -> List[ForensicEvent]:
+        events = []
+        from datetime import datetime, timezone
+        ts = datetime.now(tz=timezone.utc)
+        try:
+            for line in self.read_lines(path):
+                if line.strip():
+                    events.append(self.make_event(
+                        ts, 'text_fallback', 'generic', line.strip(), severity='info'
+                    ))
+                    if len(events) >= 10000:
+                        break
+        except Exception:
+            pass
         return events
 ```
  
@@ -3364,39 +3501,36 @@ class PlasaFallbackParser(BaseParser):
  
 ```
 # stages/stage11_mitre.py
-import json
+import json, logging
 from pathlib import Path
+from typing import Dict, List
+from tqdm import tqdm
  
-def load_attack_db(json_path: Path) -> dict:
-    '''Lädt ATT&CK JSON und erstellt einen schnellen Lookup-Index'''
-    with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+log = logging.getLogger(__name__)
  
+def _load_attack_db() -> Dict:
+    '''Lädt enterprise-attack-v15.json aus data/ — kein Internet nötig'''
+    db_path = Path(__file__).parent.parent / 'data' / 'enterprise-attack-v15.json'
     techniques = {}
-    for obj in data['objects']:
-        if obj.get('type') != 'attack-pattern': continue
-        if obj.get('revoked', False): continue  # Veraltete überspringen
- 
-        # External ID extrahieren (T1053.003)
-        ext_id = ''
-        for ref in obj.get('external_references', []):
-            if ref.get('source_name') == 'mitre-attack':
-                ext_id = ref.get('external_id', '')
-                break
- 
-        if not ext_id: continue
- 
-        # Taktiken extrahieren
-        tactics = [p['phase_name'] for p in obj.get('kill_chain_phases', [])
-                   if p.get('kill_chain_name') == 'mitre-attack']
- 
-        techniques[ext_id] = {
-            'id':          ext_id,
-            'name':        obj.get('name', ''),
-            'description': obj.get('description', '')[:500],
-            'tactics':     tactics,
-            'platforms':   obj.get('x_mitre_platforms', []),
-        }
+    if not db_path.exists():
+        log.warning('enterprise-attack-v15.json nicht gefunden — leere Technik-DB')
+        return techniques
+    try:
+        with open(db_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        for obj in data.get('objects', []):
+            if obj.get('type') == 'attack-pattern':
+                for ref in obj.get('external_references', []):
+                    if ref.get('source_name') == 'mitre-attack':
+                        tid = ref.get('external_id', '')
+                        techniques[tid] = {
+                            'name':        obj.get('name', ''),
+                            'tactics':     [p['phase_name'] for p in
+                                            obj.get('kill_chain_phases', [])],
+                            'description': obj.get('description', '')[:200],
+                        }
+    except Exception as e:
+        log.warning(f'ATT&CK DB Ladefehler: {e}')
     return techniques
 ```
  
@@ -3412,127 +3546,96 @@ Jede Zeile = ein Keyword das in Events gesucht wird → T-Nummer zugeordnet. Gro
 # Format: 'keyword_im_event': ('T-Nummer', 'Confidence 0.0-1.0')
  
 KEYWORD_MAP = {
-    # T1053 — Scheduled Task / Job
-    'cron':          ('T1053.003', 0.7),
-    'crontab':       ('T1053.003', 0.8),
-    '/etc/cron':     ('T1053.003', 0.9),
-    'at command':    ('T1053.001', 0.8),
-    'systemd timer': ('T1053.006', 0.8),
+    # T1053 — Scheduled Task / Cron
+    'crontab':             ('T1053.003', 0.8),
+    'cron.d':              ('T1053.003', 0.7),
+    'systemd timer':       ('T1053.006', 0.7),
  
     # T1070 — Indicator Removal
-    'log deleted':   ('T1070.002', 0.9),
-    'history -c':    ('T1070.003', 0.95),
-    'rm .bash_history': ('T1070.003', 0.95),
-    'shred':         ('T1070.004', 0.9),
-    'wipe':          ('T1070.004', 0.8),
-    'unset histfile':('T1070.003', 0.95),
+    '> /var/log':          ('T1070.002', 0.9),
+    'truncate -s 0':       ('T1070.002', 0.95),
+    'rm -f /var/log':      ('T1070.002', 0.95),
+    'shred':               ('T1070.002', 0.8),
+    'history -c':          ('T1070.003', 0.9),
+    'unset histfile':      ('T1070.003', 0.95),
  
     # T1078 — Valid Accounts
-    'accepted password': ('T1078', 0.6),
-    'accepted publickey': ('T1078', 0.6),
-    'su root':       ('T1078.003', 0.8),
-    'sudo su':       ('T1078.003', 0.8),
+    'accepted password':   ('T1078', 0.6),
+    'accepted publickey':  ('T1078', 0.6),
  
-    # T1059 — Command and Scripting Interpreter
-    '/bin/bash -i':  ('T1059.004', 0.95),
-    'bash -c':       ('T1059.004', 0.8),
-    'python -c':     ('T1059.006', 0.85),
-    'perl -e':       ('T1059.006', 0.85),
-    'ruby -e':       ('T1059.006', 0.85),
-    'php -r':        ('T1059.006', 0.85),
+    # T1059 — Command and Scripting
+    'bash -i':             ('T1059.004', 0.9),
+    'python -c':           ('T1059.006', 0.85),
+    'perl -e':             ('T1059.006', 0.85),
+    '/bin/sh':             ('T1059.004', 0.7),
  
     # T1105 — Ingress Tool Transfer
-    'wget http':     ('T1105', 0.7),
-    'curl -o':       ('T1105', 0.7),
-    'scp ':          ('T1105', 0.6),
-    'rsync ':        ('T1105', 0.5),
-    'tftp ':         ('T1105', 0.8),
+    'wget ':               ('T1105', 0.7),
+    'curl ':               ('T1105', 0.7),
+    'scp ':                ('T1105', 0.6),
+    'sftp ':               ('T1105', 0.6),
  
-    # T1003 — OS Credential Dumping
-    '/etc/shadow':   ('T1003.008', 0.9),
-    '/etc/passwd':   ('T1003.008', 0.7),
-    'hashdump':      ('T1003', 0.95),
-    'mimikatz':      ('T1003.001', 0.99),
+    # T1003 — Credential Dumping
+    '/etc/shadow':         ('T1003.008', 0.9),
+    '/etc/passwd':         ('T1003.008', 0.7),
+    'hashdump':            ('T1003', 0.95),
+    'mimikatz':            ('T1003.001', 0.99),
  
     # T1098 — Account Manipulation
-    'useradd':       ('T1098', 0.8),
-    'usermod':       ('T1098', 0.7),
-    'passwd ':       ('T1098', 0.6),
-    'new user':      ('T1098', 0.8),
-    'visudo':        ('T1098', 0.85),
+    'useradd':             ('T1098', 0.8),
+    'usermod':             ('T1098', 0.8),
+    'new user:':           ('T1098', 0.85),
  
-    # T1543 — Create or Modify System Process
-    'systemctl enable': ('T1543.002', 0.8),
-    'systemctl start':  ('T1543.002', 0.5),
-    '/etc/init.d':   ('T1543.002', 0.7),
-    'update-rc.d':   ('T1543.002', 0.8),
+    # T1543 — Create/Modify System Process
+    'systemctl enable':    ('T1543.002', 0.8),
+    'systemctl daemon-reload': ('T1543.002', 0.7),
+    '.service':            ('T1543.002', 0.5),
  
-    # T1562 — Impair Defenses
-    'ufw disable':   ('T1562.004', 0.95),
-    'iptables -f':   ('T1562.004', 0.9),
-    'setenforce 0':  ('T1562.006', 0.99),
-    'systemctl stop ufw': ('T1562.004', 0.95),
-    'service fail2ban stop': ('T1562', 0.9),
+    # T1562 — Disable Security Tools
+    'ufw disable':         ('T1562.004', 0.95),
+    'iptables -f':         ('T1562.004', 0.9),
+    'systemctl stop ufw':  ('T1562.004', 0.9),
+    'setenforce 0':        ('T1562.001', 0.95),
  
     # T1110 — Brute Force
-    'failed password': ('T1110.001', 0.8),
-    'authentication failure': ('T1110', 0.8),
-    'invalid user':  ('T1110.003', 0.85),
- 
-    # T1071 — Application Layer Protocol
-    'irc':           ('T1071.003', 0.7),
-    'c2':            ('T1071', 0.6),
- 
-    # T1048 — Exfiltration Over Alternative Protocol
-    'scp -r':        ('T1048', 0.7),
-    'ftp put':       ('T1048', 0.8),
- 
-    # T1014 — Rootkit
-    'insmod':        ('T1014', 0.7),
-    'modprobe':      ('T1014', 0.5),
-    'lkm':           ('T1014', 0.8),
- 
-    # T1083 — File and Directory Discovery
-    'find / -name':  ('T1083', 0.6),
-    'ls -la /etc':   ('T1083', 0.5),
- 
-    # T1222 — File and Directory Permissions Modification
-    'chmod 777':     ('T1222', 0.8),
-    'chmod +s':      ('T1222', 0.9),  # SUID setzen
-    'chown root':    ('T1222', 0.7),
- 
-    # T1055 — Process Injection
-    'ptrace':        ('T1055', 0.8),
-    '/proc/*/mem':   ('T1055', 0.9),
- 
-    # T1136 — Create Account
-    'adduser':       ('T1136.001', 0.85),
-    'useradd -m':    ('T1136.001', 0.85),
- 
-    # T1190 — Exploit Public-Facing Application
-    'union select':  ('T1190', 0.9),   # SQL Injection
-    '../../../':     ('T1190', 0.85),  # Path Traversal
-    '<script>':      ('T1190', 0.85),  # XSS
+    'failed password':     ('T1110.001', 0.8),
+    'authentication failure': ('T1110', 0.75),
+    'invalid user':        ('T1110.001', 0.8),
  
     # T1021 — Remote Services
-    'rdp':           ('T1021.001', 0.7),
-    'vnc':           ('T1021.005', 0.7),
-    'telnet':        ('T1021', 0.8),
- 
-    # T1547 — Boot or Logon Autostart
-    '.bashrc':       ('T1547.006', 0.7),
-    '.profile':      ('T1547.006', 0.7),
-    '/etc/profile':  ('T1547.006', 0.8),
- 
-    # T1027 — Obfuscated Files
-    'base64 -d':     ('T1027', 0.85),
-    'base64 --decode': ('T1027', 0.85),
-    'xxd -r':        ('T1027', 0.8),
+    'ssh ':                ('T1021.004', 0.5),
+    'rdp':                 ('T1021.001', 0.7),
  
     # T1040 — Network Sniffing
-    'tcpdump':       ('T1040', 0.7),
-    'wireshark':     ('T1040', 0.6),
-    'tshark':        ('T1040', 0.6),
+    'tcpdump':             ('T1040', 0.7),
+    'wireshark':           ('T1040', 0.6),
+    'tshark':              ('T1040', 0.6),
+ 
+    # T1027 — Obfuscated Files
+    'base64':              ('T1027', 0.7),
+    'xxd -r':              ('T1027', 0.8),
+ 
+    # T1505 — Server Software Component
+    'webshell':            ('T1505.003', 0.95),
+    'php eval':            ('T1505.003', 0.9),
+ 
+    # T1082 — System Information Discovery
+    'uname -a':            ('T1082', 0.6),
+    'cat /etc/os-release': ('T1082', 0.6),
+ 
+    # T1083 — File and Directory Discovery
+    'find / ':             ('T1083', 0.6),
+    'ls -la':              ('T1083', 0.4),
+ 
+    # T1046 — Network Service Scanning
+    'nmap':                ('T1046', 0.9),
+    'masscan':             ('T1046', 0.9),
+    'netstat':             ('T1046', 0.4),
+ 
+    # T1014 — Rootkit
+    'insmod':              ('T1014', 0.85),
+    'ld_preload':          ('T1014', 0.9),
+    'sys_call_table':      ('T1014', 0.95),
 }
 ```
  
@@ -3541,29 +3644,68 @@ KEYWORD_MAP = {
  
  
 ```
-def map_events_to_mitre(events: List[ForensicEvent],
-                         techniques: dict) -> List[dict]:
-    '''Mappt Events auf MITRE ATT&CK Techniken via Keyword-Matching'''
+def run(ctx: PipelineContext) -> PipelineContext:
+    techniques = _load_attack_db()
+    hits       = _map_events(ctx.normalized_events, techniques)
+    hits      += _map_antiforensics(ctx.antiforensics_hits, techniques)
+    ctx.mitre_hits = _deduplicate(hits)
+    return ctx
+ 
+def _map_events(events, techniques: Dict) -> List[Dict]:
     hits = []
-    for event in events:
+    for event in tqdm(events, desc='  MITRE ATT&CK Mapping', unit='Event', dynamic_ncols=True):
         msg_lower = event.message.lower()
         for keyword, (tech_id, confidence) in KEYWORD_MAP.items():
             if keyword.lower() in msg_lower:
                 tech = techniques.get(tech_id, {})
                 hits.append({
-                    'technique_id':   tech_id,
-                    'technique_name': tech.get('name', 'Unbekannt'),
-                    'tactics':        tech.get('tactics', []),
-                    'confidence':     confidence,
+                    'technique_id':    tech_id,
+                    'technique_name':  tech.get('name', 'Unbekannt'),
+                    'tactics':         tech.get('tactics', []),
+                    'confidence':      confidence,
                     'event_timestamp': event.timestamp.isoformat(),
-                    'event_message':  event.message[:300],
-                    'event_source':   event.source,
+                    'event_message':   event.message[:300],
+                    'event_source':    event.source,
                     'keyword_matched': keyword,
                 })
                 event.mitre_tags.append(tech_id)
-                break  # Pro Event nur eine Technik
-    # Deduplizieren: gleiche Technik nur einmal pro Stunde
-    return deduplicate_hits(hits)
+                break
+    return hits
+ 
+def _map_antiforensics(af_hits: List[Dict], techniques: Dict) -> List[Dict]:
+    '''Mappt Anti-Forensics-Treffer zusätzlich auf MITRE-Techniken'''
+    hits = []
+    for hit in af_hits:
+        text = hit.get('details', '').lower()
+        for keyword, (tech_id, confidence) in KEYWORD_MAP.items():
+            if keyword.lower() in text:
+                tech = techniques.get(tech_id, {})
+                hits.append({
+                    'technique_id':    tech_id,
+                    'technique_name':  tech.get('name', 'Unbekannt'),
+                    'tactics':         tech.get('tactics', []),
+                    'confidence':      confidence,
+                    'event_timestamp': hit.get('timestamp', ''),
+                    'event_message':   hit.get('details', '')[:300],
+                    'event_source':    hit.get('source', 'antiforensics'),
+                    'keyword_matched': keyword,
+                })
+                break
+    return hits
+ 
+def _deduplicate(hits: List[Dict]) -> List[Dict]:
+    '''Behält pro Technik nur den Treffer mit höchster Confidence'''
+    seen, result = {}, []
+    for hit in hits:
+        key = hit['technique_id']
+        if key not in seen:
+            seen[key] = hit
+            result.append(hit)
+        elif hit['confidence'] > seen[key]['confidence']:
+            seen[key] = hit
+            idx = next(i for i, h in enumerate(result) if h['technique_id'] == key)
+            result[idx] = hit
+    return result
 ```
  
  
@@ -3598,57 +3740,105 @@ def map_events_to_mitre(events: List[ForensicEvent],
  
 ```
 # stages/stage09_antiforensics.py
-import yara
+import re, logging
 from pathlib import Path
+from typing import List, Dict
+from tqdm import tqdm
+from models.pipeline_context import PipelineContext
  
-def load_yara_rules(rules_dir: Path) -> yara.Rules:
-    '''Lädt alle YARA-Regeln aus dem Verzeichnis'''
-    rule_files = {}
-    for yar_file in rules_dir.rglob('*.yar'):
-        rule_files[yar_file.stem] = str(yar_file)
-    return yara.compile(filepaths=rule_files)
+log = logging.getLogger(__name__)
  
-def scan_file_with_yara(file_path: Path, rules: yara.Rules) -> List[dict]:
-    '''Scannt eine einzelne Datei mit YARA-Regeln'''
+TIMESTOMPING_KEYWORDS = ['timestomp', 'touch -t', 'setfiletime', '$si', '$fn']
+LOG_WIPE_KEYWORDS     = ['> /var/log', 'truncate -s 0', 'rm -f /var/log',
+                          'echo "" > /var/log', 'shred /var/log', '> /dev/null 2>&1']
+ROOTKIT_KEYWORDS      = ['insmod', 'modprobe', 'ld_preload', '/proc/kcore',
+                          'ptrace', 'sys_call_table']
+SECURE_DELETE_TOOLS   = ['shred', 'srm', 'wipe', 'bleachbit', 'dd if=/dev/zero',
+                          'dd if=/dev/urandom']
+ 
+def run(ctx: PipelineContext) -> PipelineContext:
+    hits  = _check_timestomping(ctx)
+    hits += _check_log_wiping(ctx)
+    hits += _check_rootkit_indicators(ctx)
+    hits += _check_secure_delete(ctx)
+    hits += _check_yara(ctx)
+    ctx.antiforensics_hits = hits
+    return ctx
+ 
+def _check_timestomping(ctx: PipelineContext) -> List[Dict]:
     hits = []
-    try:
-        matches = rules.match(str(file_path), timeout=30)
-        for match in matches:
-            hits.append({
-                'rule':     match.rule,
-                'tags':     match.tags,
-                'file':     str(file_path),
-                'strings':  [(s.identifier, s.offset) for s in match.strings],
-            })
-    except yara.TimeoutError:
-        log.warning(f'YARA Timeout für {file_path}')
-    except yara.Error as e:
-        log.warning(f'YARA Fehler: {e}')
+    for event in tqdm(ctx.normalized_events, desc='  Timestomping-Scan', unit='Event', leave=False, dynamic_ncols=True):
+        if any(kw in event.message.lower() for kw in TIMESTOMPING_KEYWORDS):
+            hits.append({'type':'timestomping','file':event.file_path or 'unbekannt',
+                'details':event.message[:200],'severity':'high',
+                'source':event.source,'timestamp':event.timestamp.isoformat()})
     return hits
  
-# Anti-Forensics spezifische YARA-Regeln (zusätzlich zu Community-Regeln):
-CUSTOM_ANTIFORENSICS_RULES = '''
-rule Timestomping_Indicator {
-    meta:
-        description = 'Erkennt Timestomping-Tools'
-    strings:
-        $s1 = 'SetFileTime' ascii
-        $s2 = 'touch -t' ascii
-        $s3 = 'timestomp' ascii nocase
-    condition: any of them
-}
+def _check_log_wiping(ctx: PipelineContext) -> List[Dict]:
+    hits = []
+    for event in tqdm(ctx.normalized_events, desc='  Log-Wiping-Scan', unit='Event', leave=False, dynamic_ncols=True):
+        if any(kw in event.message.lower() for kw in LOG_WIPE_KEYWORDS):
+            hits.append({'type':'log_deletion','file':event.file_path or '/var/log/*',
+                'details':event.message[:200],'severity':'critical',
+                'source':event.source,'timestamp':event.timestamp.isoformat()})
+    for key, lines in ctx.disk_artifacts.items():
+        for line in lines:
+            if any(kw in line.lower() for kw in LOG_WIPE_KEYWORDS):
+                hits.append({'type':'log_deletion','file':line.strip()[:100],
+                    'details':f'Dissect-Fund: {line[:100]}','severity':'high',
+                    'source':f'dissect:{key}','timestamp':''})
+    return hits
  
-rule LogWiping_Indicator {
-    meta:
-        description = 'Erkennt Log-Löschungs-Muster'
-    strings:
-        $s1 = '> /var/log' ascii
-        $s2 = 'truncate -s 0' ascii
-        $s3 = 'rm -f /var/log' ascii
-        $s4 = 'echo "" > /var/log' ascii
-    condition: any of them
-}
-'''
+def _check_rootkit_indicators(ctx: PipelineContext) -> List[Dict]:
+    hits = []
+    for event in tqdm(ctx.normalized_events, desc='  Rootkit-Scan', unit='Event', leave=False, dynamic_ncols=True):
+        if any(kw in event.message.lower() for kw in ROOTKIT_KEYWORDS):
+            hits.append({'type':'rootkit_indicator','file':event.file_path or 'unbekannt',
+                'details':event.message[:200],'severity':'critical',
+                'source':event.source,'timestamp':event.timestamp.isoformat()})
+    for plugin, rows in ctx.memory_results.items():
+        for row in rows:
+            row_str = str(row).lower()
+            if 'hidden' in row_str or 'injected' in row_str or 'malfind' in plugin:
+                hits.append({'type':'rootkit_indicator','file':str(row)[:80],
+                    'details':f'Volatility {plugin}: {str(row)[:150]}',
+                    'severity':'critical','source':f'volatility:{plugin}','timestamp':''})
+    return hits
+ 
+def _check_secure_delete(ctx: PipelineContext) -> List[Dict]:
+    hits = []
+    for event in tqdm(ctx.normalized_events, desc='  Secure-Delete-Scan', unit='Event', leave=False, dynamic_ncols=True):
+        if any(kw in event.message.lower() for kw in SECURE_DELETE_TOOLS):
+            hits.append({'type':'secure_delete','file':event.file_path or 'unbekannt',
+                'details':event.message[:200],'severity':'high',
+                'source':event.source,'timestamp':event.timestamp.isoformat()})
+    return hits
+ 
+def _check_yara(ctx: PipelineContext) -> List[Dict]:
+    '''Scannt alle Dateien im case_dir mit YARA-Regeln aus data/yara-rules/'''
+    hits = []
+    rules_dir = Path(__file__).parent.parent / 'data' / 'yara-rules'
+    if not rules_dir.exists(): return hits
+    try:
+        import yara
+        targets = [t for t in ctx.case_dir.rglob('*')
+                   if t.is_file() and t.stat().st_size <= 50_000_000]
+        for rf in rules_dir.rglob('*.yar'):
+            try:
+                rule_set = yara.compile(filepath=str(rf))
+                for target in targets:
+                    try:
+                        for match in rule_set.match(str(target), timeout=30):
+                            hits.append({'type':'yara_match','file':str(target),
+                                'details':f'YARA-Regel: {match.rule} Tags: {match.tags}',
+                                'severity':'high','source':'yara','timestamp':'',
+                                'rule':match.rule})
+                    except Exception: continue
+                del rule_set
+            except Exception: continue
+    except ImportError:
+        log.warning('yara-python nicht installiert — YARA-Scan übersprungen')
+    return hits
 ```
  
  
@@ -3675,7 +3865,7 @@ hayabusa:
   rules_dir:  'data/sigma-rules/rules/windows'
   min_level:  'medium'  # low, medium, high, critical
  
-# In stage04_logs.py — Hayabusa mit Sigma-Regeln aufrufen:
+# In stage06_logs.py — Hayabusa mit Sigma-Regeln aufrufen:
 subprocess.run([
     cfg.hayabusa_binary,
     'json-timeline',
@@ -3700,11 +3890,11 @@ subprocess.run([
 ---
  
  
-Der Parser-Router entscheidet welcher Parser für welche Datei zuständig ist. Er wird in Stufe 3 aufgerufen und iteriert über alle gefundenen Log-Dateien im Image.
+Der Parser-Router entscheidet welcher Parser für welche Datei zuständig ist. Er wird in Stufe 6 aufgerufen und iteriert über alle gefundenen Log-Dateien im Image.
  
  
 ```
-# stages/stage04_logs.py — ParserRouter
+# stages/stage06_logs.py — ParserRouter
 from parsers import (  # Alle Parser importieren
     SyslogParser, AuthLogParser, JournaldParser, KernLogParser,
     BootLogParser, DaemonLogParser, WtmpParser, LastlogParser,
@@ -3786,7 +3976,7 @@ def route_and_parse(log_file: Path) -> List[ForensicEvent]:
  
 ```
 # ── Forensik-Frameworks ──────────────────────────────────────
-dissect==3.22                     # Disk-Image Analyse (Stage 3, Stage 5)
+dissect==3.22                     # Disk-Image Analyse (Stage 3, Stage 4)
 volatility3==2.5.0                # RAM-Dump Analyse (Stage 2)
 
 # ── Log-Parsing ──────────────────────────────────────────────
@@ -3794,7 +3984,7 @@ python-evtx==0.7.4                # EVTX direkt lesen (Fallback Stage 4)
 construct==2.10.68                # Binär-Strukturen parsen (wtmp, utmp, lastlog)
 
 # ── YARA ─────────────────────────────────────────────────────
-yara-python==4.3.1                # YARA-Regeln ausführen (Stage 6, Stage 9)
+yara-python==4.3.1                # YARA-Regeln ausführen (Stage 9)
 
 # ── ML ───────────────────────────────────────────────────────
 scikit-learn==1.4.0               # Isolation Forest (Stage 10)
@@ -3818,13 +4008,13 @@ timesketch-api-client==20240101   # Timesketch Upload (Stage 14)
 attackcti==0.3.4                  # ATT&CK API
 
 # ── Datenbank ────────────────────────────────────────────────
-duckdb>=0.10.0                    # Event-Store (Stage 4, Stage 8)
+duckdb>=0.10.0                    # Event-Store (Stage 6, Stage 8)
 
 # ── Fortschrittsanzeige ──────────────────────────────────────
-tqdm>=4.66.0                      # Fortschrittsbalken (Stage 4, 7, 9, 10, 11)
+tqdm>=4.66.0                      # Fortschrittsbalken (Stage 5, 6, 9, 10, 11)
 
 # ── Konfiguration ────────────────────────────────────────────
-pyyaml==6.0.1                     # config.yaml lesen (Stage 4.3, pipeline.py)
+pyyaml==6.0.1                     # config.yaml lesen (Stage 6.3, pipeline.py)
 
 # ── HTTP & Download ──────────────────────────────────────────
 requests==2.31.0                  # HTTP-Requests

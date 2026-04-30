@@ -7,7 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from models.pipeline_context import PipelineContext
-from stages.stage04_logs import route_and_parse, run
+from stages.stage06_logs import route_and_parse, run
 
 
 def test_route_syslog():
