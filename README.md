@@ -1344,12 +1344,84 @@ pip install -r requirements.txt
 # attackcti==0.3.4                 MITRE ATT&CK
 # duckdb>=0.10.0                   Events-Datenbank
 # tqdm>=4.66.0                     Fortschrittsanzeige
+# rich>=13.0.0                     Terminal-UI (Live-Tabelle, Spinner, Farben)
 # pyyaml==6.0.1                    Konfiguration
 # requests==2.31.0                 HTTP
 # urllib3==2.2.0                   URL-Bibliothek
 ```
  
  
+## 6.2.1 Terminal-UI — Rich
+
+
+Die Pipeline verwendet `rich` für eine animierte, farbige Terminal-Oberfläche während des Analyse-Durchlaufs.
+
+
+### Was die UI zeigt
+
+Während die Pipeline läuft wird im Terminal eine Live-Tabelle mit allen 14 Stages angezeigt:
+
+```
+╭──────────────────────────────────────────────────────────────╮
+│  DFIR Pipeline v3.0  │  image.E01  │  01:23                  │
+│                                                               │
+│  Stage │ Bezeichnung                    │ Status    │ Zeit    │
+│ ───────┼────────────────────────────────┼───────────┼──────── │
+│  01    │ Dateierkennung & Beweissich... │ ✅ E01 2.3GB│  3s   │
+│  02    │ RAM-Analyse (Volatility3)      │ ✅ 12.341  │ 41s    │
+│  03    │ System-Profiling               │ ✅ Ubuntu  │  8s    │
+│  04    │ Disk-Extraktion (Dissect)      │ ⠸ läuft...│ 01:23  │
+│  04.1  │ Autopsy-Integration            │ ⏸ wartend │        │
+│  05    │ TSK Fallback                   │ ⏸ wartend │        │
+│  06    │ Log-Parsing (38 Parser)        │ ⏸ wartend │        │
+│  ...   │ ...                            │ ⏸ wartend │        │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+**Status-Icons:**
+
+| Icon | Bedeutung |
+| --- | --- |
+| `⏸ wartend` | Stage noch nicht gestartet |
+| `⠸ läuft...` | Stage läuft gerade (animierter Spinner) |
+| `✅ OK` | Stage erfolgreich abgeschlossen |
+| `⏭ übersprungen` | Stage wurde bewusst übersprungen (z.B. kein RAM-Dump) |
+| `❌ FEHLER` | Stage fehlgeschlagen (Pipeline läuft trotzdem weiter) |
+
+
+### Abschluss-Summary
+
+Nach dem Durchlauf erscheint automatisch eine farbige Zusammenfassung:
+
+```
+╭──────────────────────────────────────────────────────╮
+│             ✅  ANALYSE ABGESCHLOSSEN                 │
+│  Gesamtdauer      04:32                               │
+│  Qualität         SEHR GUT                            │
+│  Events           1.243.891                           │
+│  IOCs             47                                  │
+│  Anomalien        12                                  │
+│  MITRE-Techniken  8                                   │
+│  Ausgabe          output/2026/case_20260501_091533/   │
+╰──────────────────────────────────────────────────────╯
+```
+
+
+### Implementierung
+
+Die UI ist in `utils/rich_ui.py` implementiert (`PipelineUI`-Klasse) und wird in `pipeline.py` aufgerufen:
+
+```python
+ui = PipelineUI(image_name=image_path.name)
+ui.start()
+# ... Pipeline läuft ...
+ui.stop()
+ui.show_summary(ctx)
+```
+
+Das normale Python-Logging wird während der UI auf `WARNING` gesetzt — die Stage-Statusinformationen erscheinen direkt in der Live-Tabelle.
+
+
 ## 6.3 Timesketch — Installation & Start (Docker)
  
  
