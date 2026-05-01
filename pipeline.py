@@ -10,6 +10,7 @@ from pathlib import Path
 
 from models.pipeline_context import PipelineContext
 from utils.logger import get_logger
+from utils.rich_ui import PipelineUI
 
 from stages import (
     stage01_detection,
@@ -30,11 +31,12 @@ from stages import (
 )
 
 log = get_logger('pipeline')
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)   # UI zeigt Status — nur Warnungen/Fehler ins Log
 
 
 def run_stage(stage_fn, ctx: PipelineContext, stage_name: str,
-              **kwargs) -> PipelineContext:
+              ui: PipelineUI, **kwargs) -> PipelineContext:
+    ui.stage_start(stage_name)
     try:
         if ctx.coc:
             ctx.coc.add_entry(stage_name, 'gestartet')
@@ -42,13 +44,35 @@ def run_stage(stage_fn, ctx: PipelineContext, stage_name: str,
         ctx.stage_status[stage_name] = 'OK'
         if ctx.coc:
             ctx.coc.add_entry(stage_name, 'abgeschlossen')
+
+        # Übersprungen-Erkennung anhand stage_status
+        raw = ctx.stage_status.get(stage_name, 'OK')
+        if 'ÜBERSPRUNGEN' in raw:
+            ui.stage_done(stage_name, status='skipped')
+        else:
+            # Kurze Zusatzinfo pro Stage
+            notes = {
+                'stage_01': f'{ctx.file_type}  {ctx.file_size_gb:.1f} GB',
+                'stage_02': f'{sum(len(v) for v in ctx.memory_results.values()):,} Einträge',
+                'stage_03': ctx.os_name or '',
+                'stage_04': f'{sum(len(v) for v in ctx.disk_artifacts.values()):,} Artefakte',
+                'stage_06': f'{ctx.parsed_events:,} Events',
+                'stage_07': f'{len(ctx.iocs)} IOCs',
+                'stage_08': f'{len(ctx.normalized_events):,} Events normalisiert',
+                'stage_09': f'{len(ctx.antiforensics_hits)} Treffer',
+                'stage_10': f'{len(ctx.anomalies)} Anomalien',
+                'stage_11': f'{len(ctx.mitre_hits)} Techniken',
+            }
+            ui.stage_done(stage_name, status='ok', note=notes.get(stage_name, 'OK'))
         return result
+
     except Exception as e:
-        ctx.stage_errors[stage_name] = str(e)
-        ctx.stage_status[stage_name] = 'FEHLER'
+        ctx.stage_errors[stage_name]  = str(e)
+        ctx.stage_status[stage_name]  = 'FEHLER'
         if ctx.coc:
             ctx.coc.add_entry(stage_name, f'FEHLER: {e}')
         log.error(f'Stufe {stage_name} fehlgeschlagen: {e}')
+        ui.stage_done(stage_name, status='error')
         return ctx
 
 
@@ -57,10 +81,10 @@ def main():
         description='DFIR Analyse-Pipeline v3.0',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument('image',         help='Pfad zum Disk-Image (.E01, .dd, .vmdk, .raw)')
-    parser.add_argument('--ram',         help='Pfad zum RAM-Dump (.raw, .dmp, .mem)')
-    parser.add_argument('--logs',        help='Pfad zum Log-Ordner')
-    parser.add_argument('--output_dir',  default='./output', help='Ausgabe-Verzeichnis')
+    parser.add_argument('image',           help='Pfad zum Disk-Image (.E01, .dd, .vmdk, .raw)')
+    parser.add_argument('--ram',           help='Pfad zum RAM-Dump (.raw, .dmp, .mem)')
+    parser.add_argument('--logs',          help='Pfad zum Log-Ordner')
+    parser.add_argument('--output_dir',    default='./output', help='Ausgabe-Verzeichnis')
     parser.add_argument('--force-autopsy', action='store_true', help='Autopsy erzwingen')
     parser.add_argument('--no-autopsy',    action='store_true', help='Autopsy deaktivieren')
     parser.add_argument('--no-timesketch', action='store_true', help='Timesketch-Upload deaktivieren')
@@ -74,7 +98,7 @@ def main():
 
     image_path = Path(args.image)
     if not image_path.exists():
-        log.error(f'Image nicht gefunden: {image_path}')
+        print(f'[Fehler] Image nicht gefunden: {image_path}')
         sys.exit(1)
 
     ctx = PipelineContext(
@@ -86,45 +110,32 @@ def main():
     )
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
-    log.info('=' * 60)
-    log.info('  DFIR Analyse-Pipeline v3.0')
-    log.info(f'  Image: {image_path}')
-    log.info('=' * 60)
+    ui = PipelineUI(image_name=image_path.name)
+    ui.start()
 
-    # ── Pipeline ausführen ────────────────────────────────────────────────────
-    ctx = run_stage(stage01_detection.run,      ctx, 'stage_01')
-    ctx = run_stage(stage02_memory.run,         ctx, 'stage_02')
-    ctx = run_stage(stage03_profiling.run,      ctx, 'stage_03')
-    ctx = run_stage(stage04_disk.run,           ctx, 'stage_04')
-    ctx = run_stage(stage04_1_autopsy.run,      ctx, 'stage_04_1',
-                    force=args.force_autopsy, skip=args.no_autopsy)
-    ctx = run_stage(stage05_tsk.run,            ctx, 'stage_05')
-    ctx = run_stage(stage06_logs.run,           ctx, 'stage_06')
-    ctx = run_stage(stage07_ioc.run,            ctx, 'stage_07')
-    ctx = run_stage(stage08_normalize.run,      ctx, 'stage_08')
-    ctx = run_stage(stage09_antiforensics.run,  ctx, 'stage_09')
-    ctx = run_stage(stage10_ml.run,             ctx, 'stage_10')
-    ctx = run_stage(stage11_mitre.run,          ctx, 'stage_11')
-    ctx = run_stage(stage12_aggregation.run,    ctx, 'stage_12')
-    ctx = run_stage(stage13_quality.run,        ctx, 'stage_13')
-    ctx = run_stage(stage14_export.run,         ctx, 'stage_14')
+    try:
+        # ── Pipeline ausführen ────────────────────────────────────────────────
+        ctx = run_stage(stage01_detection.run,     ctx, 'stage_01',   ui)
+        ctx = run_stage(stage02_memory.run,        ctx, 'stage_02',   ui)
+        ctx = run_stage(stage03_profiling.run,     ctx, 'stage_03',   ui)
+        ctx = run_stage(stage04_disk.run,          ctx, 'stage_04',   ui)
+        ctx = run_stage(stage04_1_autopsy.run,     ctx, 'stage_04_1', ui,
+                        force=args.force_autopsy, skip=args.no_autopsy)
+        ctx = run_stage(stage05_tsk.run,           ctx, 'stage_05',   ui)
+        ctx = run_stage(stage06_logs.run,          ctx, 'stage_06',   ui)
+        ctx = run_stage(stage07_ioc.run,           ctx, 'stage_07',   ui)
+        ctx = run_stage(stage08_normalize.run,     ctx, 'stage_08',   ui)
+        ctx = run_stage(stage09_antiforensics.run, ctx, 'stage_09',   ui)
+        ctx = run_stage(stage10_ml.run,            ctx, 'stage_10',   ui)
+        ctx = run_stage(stage11_mitre.run,         ctx, 'stage_11',   ui)
+        ctx = run_stage(stage12_aggregation.run,   ctx, 'stage_12',   ui)
+        ctx = run_stage(stage13_quality.run,       ctx, 'stage_13',   ui)
+        ctx = run_stage(stage14_export.run,        ctx, 'stage_14',   ui)
+    finally:
+        ui.stop()
 
-    # ── Ergebnis ausgeben ────────────────────────────────────────────────────
-    from stages.stage13_quality import evaluate_quality
-    quality = evaluate_quality(ctx)
-
-    log.info('=' * 60)
-    log.info('  ANALYSE ABGESCHLOSSEN')
-    log.info(f'  Qualität:   {quality}')
-    log.info(f'  Events:     {ctx.parsed_events:,}')
-    log.info(f'  IOCs:       {len(ctx.iocs)}')
-    log.info(f'  MITRE:      {len(ctx.mitre_hits)} Techniken')
-    log.info(f'  Anomalien:  {len(ctx.anomalies)}')
-    log.info(f'  Ausgabe:    {ctx.case_dir}')
-    log.info('=' * 60)
-
-    if ctx.enriched_summary:
-        print('\n' + ctx.enriched_summary)
+    # ── Abschluss-Zusammenfassung ─────────────────────────────────────────────
+    ui.show_summary(ctx)
 
     return 0 if not ctx.stage_errors else 1
 

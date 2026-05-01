@@ -22,11 +22,11 @@ LOG_KEYWORDS = [
 
 def run(ctx: PipelineContext) -> PipelineContext:
     if not ctx.dissect_empty:
-        log.info('Stage 7: TSK Fallback — nicht nötig (Dissect hat Daten)')
+        log.info('Stage 5: TSK Fallback — nicht nötig (Dissect hat Daten)')
         ctx.stage_status['stage_07'] = 'ÜBERSPRUNGEN — Dissect erfolgreich'
         return ctx
 
-    log.info('Stage 7: TSK Fallback aktiv')
+    log.info('Stage 5: TSK Fallback aktiv')
     ctx.tsk_fallback_used = True
     ctx.ioc_quality       = 'MITTEL'
     results               = {}
@@ -49,7 +49,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
         results[f'partition_{offset}'] = part_result
 
-        if fs_type in FS_TYPES and part_result and ctx.case_dir:
+        if (fs_type in FS_TYPES or fs_type == 'xfs') and part_result and ctx.case_dir:
             log_dir = ctx.case_dir / 'raw' / 'log_artefakte'
             n = _extract_log_files(ctx.disk_image_path, offset, part_result, log_dir, ctx.workers)
             log.info(f'  {n} Log-Dateien aus Partition {offset} extrahiert → {log_dir}')
@@ -184,16 +184,18 @@ def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str],
 
 
 def _analyse_xfs(image_path: Path, offset: int) -> List[str]:
-    entries = []
+    # fls unterstützt XFS — gleicher Output wie _analyse_partition, daher icat-kompatibel
     try:
         result = subprocess.run(
-            ['xfs_db', '-r', '-c', 'ls', str(image_path)],
-            capture_output=True, text=True, timeout=120
+            ['fls', '-r', '-o', str(offset), str(image_path)],
+            capture_output=True, text=True, timeout=300, errors='replace'
         )
-        entries = result.stdout.splitlines()
+        entries = [l for l in result.stdout.splitlines() if l.strip()]
+        log.info(f'  XFS via fls: {len(entries)} Einträge')
+        return entries
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        log.warning(f'xfs_db fehlgeschlagen: {e}')
-    return entries
+        log.warning(f'  fls für XFS fehlgeschlagen: {e}')
+    return []
 
 
 def _recover_deleted(image_path: Path, out_dir: Path) -> None:

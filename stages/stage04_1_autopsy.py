@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 def run(ctx: PipelineContext, force: bool = False, skip: bool = False) -> PipelineContext:
     should_run, reason = should_run_autopsy(ctx, force, skip)
     ctx.autopsy_reason = reason
-    log.info(f'Stage 5.1: Autopsy — {reason}')
+    log.info(f'Stage 4.1: Autopsy — {reason}')
 
     if not should_run:
         ctx.autopsy_ran = False

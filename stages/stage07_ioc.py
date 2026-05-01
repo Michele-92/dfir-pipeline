@@ -36,7 +36,7 @@ EXTRACTORS = [
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 6: IOC-Extraktion')
+    log.info('Stage 7: IOC-Extraktion')
     iocs: List[IOC] = []
     seen = set()
 

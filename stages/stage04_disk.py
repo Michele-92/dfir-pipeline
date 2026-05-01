@@ -18,7 +18,7 @@ ENCRYPTED_MAGIC  = [b'ENCRYPTED', b'\x7fELF\x02', b'PK\x03\x04']
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 5: Dissect')
+    log.info('Stage 4: Dissect')
     artifacts = {}
     out_dir = ctx.case_dir / 'raw' / 'disk_artefakte' if ctx.case_dir else Path('/tmp/dfir_disk')
     out_dir.mkdir(parents=True, exist_ok=True)

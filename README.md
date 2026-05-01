@@ -798,7 +798,7 @@ def analyse_partitions(ctx: PipelineContext):
         if fs_type in ['ntfs', 'fat32', 'exfat', 'ext4', 'ext3']:
             analyse_partition_tsk(ctx, offset, fs_type)
         elif fs_type == 'xfs':
-            analyse_partition_xfs(ctx, offset)  # xfs_db als Fallback
+            analyse_partition_xfs(ctx, offset)  # fls -r -o offset (icat-kompatibel)
         else:
             log.warning(f'Unbekanntes Dateisystem: {fs_type} — übersprungen')
 ```
@@ -1298,7 +1298,7 @@ sudo apt install default-jre -y
  
 # Forensik-Tools
 sudo apt install sleuthkit -y       # The Sleuth Kit
-sudo apt install xfsprogs -y        # xfs_db für XFS-Dateisysteme
+sudo apt install xfsprogs -y        # XFS-Dateisystem-Tools (fls-Unterstützung für XFS)
  
 # Autopsy installieren
 wget https://github.com/sleuthkit/autopsy/releases/latest
