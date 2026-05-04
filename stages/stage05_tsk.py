@@ -21,11 +21,6 @@ LOG_KEYWORDS = [
 
 
 def run(ctx: PipelineContext) -> PipelineContext:
-    if not ctx.dissect_empty:
-        log.info('Stage 5: TSK Fallback — nicht nötig (Dissect hat Daten)')
-        ctx.stage_status['stage_07'] = 'ÜBERSPRUNGEN — Dissect erfolgreich'
-        return ctx
-
     log.info('Stage 5: TSK Fallback aktiv')
     ctx.tsk_fallback_used = True
     ctx.ioc_quality       = 'MITTEL'
