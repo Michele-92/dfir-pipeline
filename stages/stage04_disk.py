@@ -26,7 +26,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
     for func in DISSECT_FUNCTIONS:
         try:
             result = subprocess.run(
-                ['target-query', '-f', func, str(ctx.disk_image_path)],
+                ['target-query', '-t', str(ctx.disk_image_path), func],
                 capture_output=True, text=True, timeout=300
             )
             lines = [l for l in result.stdout.splitlines() if l.strip()]
