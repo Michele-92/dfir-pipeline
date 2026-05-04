@@ -32,7 +32,7 @@ class DFIRApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("DFIR Pipeline")
-        self.geometry("620x520")
+        self.geometry("620x620")
         self.resizable(False, False)
         self._build_ui()
 
