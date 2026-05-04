@@ -93,7 +93,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
                 as_completed(futures),
                 total=len(log_files),
                 unit='Datei',
-                desc='  Stage 4',
+                desc='  Stage 6',
                 dynamic_ncols=True,
             )
             for future in progress:
