@@ -8,7 +8,7 @@ log = logging.getLogger(__name__)
 
 OS_PROFILES = {
     'debian': {
-        'keywords': ['debian', 'ubuntu', 'kali', 'mint'],
+        'keywords': ['debian', 'ubuntu', 'kali', 'mint', 'linux'],
         'log_paths': {
             'syslog':  Path('/var/log/syslog'),
             'auth':    Path('/var/log/auth.log'),
@@ -71,15 +71,23 @@ def run(ctx: PipelineContext) -> PipelineContext:
     return ctx
 
 
+def _parse_target_line(output: str) -> str:
+    for line in reversed(output.splitlines()):
+        line = line.strip()
+        if line.startswith('<Target ') and '>' in line:
+            return line.split('>', 1)[-1].strip()
+    return ''
+
+
 def _read_os_release(image_path) -> str:
     if image_path is None:
         return ''
     try:
         result = subprocess.run(
-            ['target-query', '-t', str(image_path), 'cat', '/etc/os-release'],
+            ['target-query', '-f', 'os', str(image_path)],
             capture_output=True, text=True, timeout=30
         )
-        return result.stdout
+        return _parse_target_line(result.stdout) or result.stdout.strip()
     except Exception:
         return ''
 
@@ -88,17 +96,19 @@ def _extract_os_name(os_release: str) -> str:
     for line in os_release.splitlines():
         if line.startswith('PRETTY_NAME='):
             return line.split('=', 1)[1].strip().strip('"')
+    if os_release.strip():
+        return os_release.strip()
     return ''
 
 
 def _read_kernel(image_path) -> str:
     try:
         result = subprocess.run(
-            ['target-query', '-t', str(image_path), 'cat', '/proc/version'],
+            ['target-query', '-f', 'version', str(image_path)],
             capture_output=True, text=True, timeout=30
         )
-        parts = result.stdout.split()
-        return parts[2] if len(parts) > 2 else ''
+        val = _parse_target_line(result.stdout)
+        return val if val else ''
     except Exception:
         return ''
 
@@ -106,10 +116,11 @@ def _read_kernel(image_path) -> str:
 def _read_hostname(image_path) -> str:
     try:
         result = subprocess.run(
-            ['target-query', '-t', str(image_path), 'cat', '/etc/hostname'],
+            ['target-query', '-f', 'hostname', str(image_path)],
             capture_output=True, text=True, timeout=30
         )
-        return result.stdout.strip()
+        val = _parse_target_line(result.stdout)
+        return val if val else result.stdout.strip() or 'unknown'
     except Exception:
         return 'unknown'
 
@@ -117,10 +128,11 @@ def _read_hostname(image_path) -> str:
 def _read_timezone(image_path) -> str:
     try:
         result = subprocess.run(
-            ['target-query', '-t', str(image_path), 'cat', '/etc/timezone'],
+            ['target-query', '-f', 'timezone', str(image_path)],
             capture_output=True, text=True, timeout=30
         )
-        tz = result.stdout.strip()
+        val = _parse_target_line(result.stdout)
+        tz = val if val else result.stdout.strip()
         return tz if tz else 'UTC'
     except Exception:
         return 'UTC'
