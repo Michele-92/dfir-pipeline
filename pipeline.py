@@ -136,6 +136,7 @@ def main():
 
     # ── Abschluss-Zusammenfassung ─────────────────────────────────────────────
     ui.show_summary(ctx)
+    ui.show_stage08_detail(ctx)
     ui.show_parser_detail(ctx)
 
     return 0 if not ctx.stage_errors else 1

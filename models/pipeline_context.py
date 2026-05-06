@@ -70,6 +70,9 @@ class PipelineContext:
 
     # ── Stage 8: Normalisierung ───────────────────────────
     normalized_events:  List[ForensicEvent] = field(default_factory=list)
+    timezone_offset:    str = ''   # z.B. 'UTC+1' oder 'UTC-5'
+    earliest_event:     str = ''   # frühestes Event UTC + Lokalzeit
+    latest_event:       str = ''   # letztes Event UTC + Lokalzeit
 
     # ── Stage 9: Anti-Forensics ───────────────────────────
     antiforensics_hits: List[Dict] = field(default_factory=list)

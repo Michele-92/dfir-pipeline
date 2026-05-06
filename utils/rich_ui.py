@@ -123,6 +123,29 @@ class PipelineUI:
             padding=(0, 1),
         ))
 
+    def show_stage08_detail(self, ctx) -> None:
+        t = Table(box=box.ROUNDED, show_header=False,
+                  border_style='cyan', expand=True)
+        t.add_column('Feld',  style='bold', min_width=28)
+        t.add_column('Wert',  style='white')
+
+        count = len(ctx.normalized_events)
+        t.add_row('Events normalisiert', f'{count:,}')
+        t.add_row('Systemzeitzone',      f'{ctx.timezone}  ({ctx.timezone_offset})')
+        t.add_row('Timestamps → UTC',    '✅')
+        t.add_row('Lokalzeit gespeichert', f'✅  ({ctx.timezone_offset})')
+        if ctx.earliest_event:
+            t.add_row('Frühestes Event', ctx.earliest_event)
+        if ctx.latest_event:
+            t.add_row('Letztes Event',   ctx.latest_event)
+
+        console.print(Panel(
+            t,
+            title='[bold cyan]Stage 08 — Datennormalisierung[/bold cyan]',
+            border_style='cyan',
+            padding=(0, 1),
+        ))
+
     def show_parser_detail(self, ctx) -> None:
         active   = ctx.parser_file_map   # {name: {'count': int, 'files': [str]}}
         all_names = ctx.all_parser_names
