@@ -17,7 +17,11 @@ class ChainOfCustody:
     md5:        str
     size_gb:    float
     start_time: datetime
-    entries:    List[CoCEntry] = field(default_factory=list)
+    entries:               List[CoCEntry]      = field(default_factory=list)
+    extracted_file_hashes: Dict[str, str]      = field(default_factory=dict)
 
     def add_entry(self, stage: str, action: str) -> None:
         self.entries.append(CoCEntry(stage=stage, action=action))
+
+    def add_file_hash(self, filename: str, sha256: str) -> None:
+        self.extracted_file_hashes[filename] = sha256

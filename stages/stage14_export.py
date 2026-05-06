@@ -730,6 +730,32 @@ def _generate_coc_pdf(ctx: PipelineContext, case_dir: Path) -> None:
         ]))
         story.append(t2)
 
+        # Extrahierte Dateien + Hashwerte
+        if coc.extracted_file_hashes:
+            story.append(Spacer(1, 6*mm))
+            story.append(_banner(
+                f'EXTRAHIERTE DATEIEN — HASHWERTE ({len(coc.extracted_file_hashes)} Dateien)',
+                C_MID_BLUE, C_WHITE, 11, W))
+            story.append(Spacer(1, 3*mm))
+            hash_rows = [['Dateiname', 'SHA256']]
+            for fname, sha in sorted(coc.extracted_file_hashes.items()):
+                hash_rows.append([fname[:50], sha])
+            t3 = Table(hash_rows, colWidths=[60*mm, W - 60*mm], repeatRows=1)
+            t3.setStyle(TableStyle([
+                ('BACKGROUND',    (0,0), (-1,0), _rl_color_from_tuple(C_MID_BLUE)),
+                ('TEXTCOLOR',     (0,0), (-1,0), _rl_color_from_tuple(C_WHITE)),
+                ('FONTNAME',      (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTNAME',      (0,1), (-1,-1), 'Helvetica'),
+                ('FONTSIZE',      (0,0), (-1,-1), 7),
+                ('ROWBACKGROUNDS',(0,1), (-1,-1),
+                 [_rl_color_from_tuple(C_WHITE), _rl_color_from_tuple(C_LIGHT_GREY)]),
+                ('GRID',          (0,0), (-1,-1), 0.3, _rl_color_from_tuple((0xDD/255,)*3)),
+                ('LEFTPADDING',   (0,0), (-1,-1), 5),
+                ('TOPPADDING',    (0,0), (-1,-1), 3),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+            ]))
+            story.append(t3)
+
     def _on_page(canv, doc):
         _draw_header(canv, A4, case_id, created, quality)
         _draw_footer(canv, A4)

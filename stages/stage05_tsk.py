@@ -1,3 +1,4 @@
+import hashlib
 import subprocess
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -55,10 +56,30 @@ def run(ctx: PipelineContext) -> PipelineContext:
     out_dir.mkdir(parents=True, exist_ok=True)
     _recover_deleted(ctx.disk_image_path, out_dir)
 
+    # Alle extrahierten Dateien hashen und in Chain of Custody eintragen
+    if ctx.coc and ctx.case_dir:
+        _hash_extracted_files(ctx.case_dir / 'raw' / 'log_artefakte', ctx)
+        _hash_extracted_files(out_dir, ctx)
+
     log.info(f'  TSK: {sum(len(v) for v in results.values())} Einträge')
     if ctx.coc:
-        ctx.coc.add_entry('stage_07', f'TSK Fallback: {len(results)} Partitionen analysiert')
+        ctx.coc.add_entry('stage_05',
+            f'TSK Fallback: {len(results)} Partitionen | '
+            f'{len(ctx.coc.extracted_file_hashes)} Dateien gehasht')
     return ctx
+
+
+def _hash_extracted_files(directory: Path, ctx) -> None:
+    if not directory.is_dir():
+        return
+    for f in directory.rglob('*'):
+        if not f.is_file():
+            continue
+        try:
+            sha256 = hashlib.sha256(f.read_bytes()).hexdigest()
+            ctx.coc.add_file_hash(f.name, sha256)
+        except Exception:
+            pass
 
 
 def _read_partitions(image_path: Path) -> List[dict]:
