@@ -3,7 +3,7 @@ import subprocess
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 from tqdm import tqdm
 from models.pipeline_context import PipelineContext
@@ -77,6 +77,15 @@ def run(ctx: PipelineContext) -> PipelineContext:
     recovered_files = [f for f in out_dir.rglob('*') if f.is_file()]
     ctx.tsk_deleted_recovered     = len(recovered_files)
     ctx.tsk_deleted_not_recovered = max(0, ctx.tsk_deleted_found - ctx.tsk_deleted_recovered)
+
+    # MACtime-Timeline generieren
+    if ctx.case_dir:
+        log_dir = ctx.case_dir / 'raw' / 'log_artefakte'
+        for part in ctx.tsk_partitions:
+            if part['status'] == 'analysiert':
+                _generate_mactime(ctx.disk_image_path, part['offset'], log_dir, ctx)
+                _run_sorter(ctx.disk_image_path, part['offset'],
+                            ctx.case_dir / 'raw' / 'sorter_output', ctx)
 
     # Alle extrahierten Dateien hashen und in Chain of Custody eintragen
     if ctx.coc and ctx.case_dir:
@@ -240,6 +249,61 @@ def _analyse_xfs(image_path: Path, offset: int) -> List[str]:
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         log.warning(f'  fls für XFS fehlgeschlagen: {e}')
     return []
+
+
+def _generate_mactime(image_path: Path, offset: int,
+                      log_dir: Path, ctx) -> None:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    body_file    = log_dir / f'mactime_body_{offset}.txt'
+    mactime_file = log_dir / 'mactime_timeline.txt'
+    try:
+        # fls -m erzeugt Body-File mit allen Timestamps
+        result = subprocess.run(
+            ['fls', '-m', '/', '-r', '-o', str(offset), str(image_path)],
+            capture_output=True, text=True, timeout=600, errors='replace'
+        )
+        if result.stdout:
+            body_file.write_text(result.stdout, encoding='utf-8', errors='replace')
+            # mactime konvertiert Body-File → lesbare Timeline
+            mt_result = subprocess.run(
+                ['mactime', '-b', str(body_file)],
+                capture_output=True, text=True, timeout=120
+            )
+            if mt_result.stdout:
+                mactime_file.write_text(mt_result.stdout,
+                                        encoding='utf-8', errors='replace')
+                lines = [l for l in mt_result.stdout.splitlines() if l.strip()]
+                ctx.tsk_mactime_events = len(lines)
+                ctx.tsk_mactime_file   = str(mactime_file)
+                log.info(f'  MACtime: {ctx.tsk_mactime_events} Einträge → {mactime_file}')
+            body_file.unlink(missing_ok=True)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log.warning(f'  MACtime fehlgeschlagen: {e}')
+
+
+def _run_sorter(image_path: Path, offset: int,
+                out_dir: Path, ctx) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        result = subprocess.run(
+            ['sorter', '-o', str(offset), '-d', str(out_dir), str(image_path)],
+            capture_output=True, text=True, timeout=300, errors='replace'
+        )
+        categories: Dict[str, int] = {}
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if ':' in line:
+                parts = line.split(':')
+                if len(parts) == 2:
+                    try:
+                        categories[parts[0].strip()] = int(parts[1].strip().split()[0])
+                    except (ValueError, IndexError):
+                        pass
+        ctx.tsk_sorter_ran        = True
+        ctx.tsk_sorter_categories = categories
+        log.info(f'  Sorter: {len(categories)} Kategorien erkannt')
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log.warning(f'  Sorter fehlgeschlagen: {e}')
 
 
 def _recover_deleted(image_path: Path, out_dir: Path) -> None:

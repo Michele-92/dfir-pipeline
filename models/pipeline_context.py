@@ -53,12 +53,16 @@ class PipelineContext:
     # ── Stage 5: TSK Fallback ─────────────────────────────
     tsk_fallback_used:       bool           = False
     tsk_results:             Dict[str, Any] = field(default_factory=dict)
-    tsk_partitions:          List[dict]     = field(default_factory=list)
-    tsk_log_files_extracted: int            = 0
-    tsk_deleted_found:       int            = 0
-    tsk_deleted_recovered:   int            = 0
-    tsk_deleted_not_recovered: int          = 0
-    tsk_extracted_filenames: List[str]      = field(default_factory=list)
+    tsk_partitions:            List[dict]     = field(default_factory=list)
+    tsk_log_files_extracted:   int            = 0
+    tsk_deleted_found:         int            = 0
+    tsk_deleted_recovered:     int            = 0
+    tsk_deleted_not_recovered: int            = 0
+    tsk_extracted_filenames:   List[str]      = field(default_factory=list)
+    tsk_mactime_events:        int            = 0
+    tsk_mactime_file:          str            = ''
+    tsk_sorter_ran:            bool           = False
+    tsk_sorter_categories:     Dict[str, int] = field(default_factory=dict)
 
     # ── Stage 6: Log-Parsing ─────────────────────────────
     events:             List[ForensicEvent] = field(default_factory=list)

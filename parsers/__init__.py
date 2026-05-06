@@ -43,6 +43,7 @@ from .containerd_parser  import ContainerdParser
 from .iis_parser         import IISLogParser
 from .evtx_parser        import EVTXParser
 from .plaso_parser       import PlasaFallbackParser
+from .mactime_parser     import MACTimeParser
 
 __all__ = [
     'SyslogParser', 'AuthLogParser', 'JournaldParser', 'KernLogParser',
@@ -54,5 +55,5 @@ __all__ = [
     'BashHistoryParser', 'ZshHistoryParser', 'FishHistoryParser', 'UtmpParser',
     'SSHParser', 'PostfixMailParser', 'FTPParser', 'SambaParser', 'OpenVPNParser',
     'DockerParser', 'ContainerdParser', 'IISLogParser', 'EVTXParser',
-    'PlasaFallbackParser',
+    'PlasaFallbackParser', 'MACTimeParser',
 ]

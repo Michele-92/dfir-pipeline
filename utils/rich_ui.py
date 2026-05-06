@@ -203,6 +203,26 @@ class PipelineUI:
                   Text(f"{ctx.tsk_deleted_not_recovered:,}  (Sektoren überschrieben)",
                        style='bold red'))
 
+        # MACtime
+        t.add_row('', '')
+        if ctx.tsk_mactime_events:
+            t.add_row('MACtime-Timeline',
+                      Text(f'✅  {ctx.tsk_mactime_events:,} Einträge', style='green'))
+        else:
+            t.add_row('MACtime-Timeline',
+                      Text('❌  mactime nicht verfügbar', style='dim'))
+
+        # Sorter
+        if ctx.tsk_sorter_ran and ctx.tsk_sorter_categories:
+            t.add_row('Sorter-Kategorien', f'{len(ctx.tsk_sorter_categories)}')
+            for cat, count in sorted(ctx.tsk_sorter_categories.items(),
+                                     key=lambda x: -x[1])[:5]:
+                t.add_row(f'  {cat}', f'{count:,} Dateien')
+        elif ctx.tsk_sorter_ran:
+            t.add_row('Sorter', Text('✅  gelaufen', style='green'))
+        else:
+            t.add_row('Sorter', Text('❌  sorter nicht verfügbar', style='dim'))
+
         console.print(Panel(
             t,
             title='[bold cyan]Stage 05 — Disk-Artefakt-Extraktion (TSK)[/bold cyan]',
