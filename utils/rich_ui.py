@@ -123,6 +123,44 @@ class PipelineUI:
             padding=(0, 1),
         ))
 
+    def show_parser_detail(self, ctx) -> None:
+        active   = ctx.parser_file_map   # {name: {'count': int, 'files': [str]}}
+        all_names = ctx.all_parser_names
+        inactive = [n for n in all_names if n not in active]
+
+        t = Table(box=box.ROUNDED, show_header=True,
+                  border_style='cyan', expand=True)
+        t.add_column('Parser',  style='bold', min_width=18)
+        t.add_column('Events',  justify='right', width=10)
+        t.add_column('Datei(en)', style='dim')
+
+        for name, info in sorted(active.items(), key=lambda x: -x[1]['count']):
+            files = info['files']
+            path_str = files[0] if len(files) == 1 else f'{len(files)} Dateien'
+            t.add_row(
+                Text(f'✅  {name}', style='bold green'),
+                f"{info['count']:,}",
+                path_str,
+            )
+
+        if inactive:
+            inactive_rows = [inactive[i:i+4] for i in range(0, len(inactive), 4)]
+            inactive_lines = '\n'.join(', '.join(row) for row in inactive_rows)
+            t.add_row('', '', '')
+            t.add_row(
+                Text(f'❌  NICHT GEFUNDEN ({len(inactive)})', style='bold red'),
+                '',
+                inactive_lines,
+            )
+
+        console.print(Panel(
+            t,
+            title=f'[bold cyan]Stage 6 — Parser Detail  '
+                  f'({len(active)} von {len(all_names)} aktiv)[/bold cyan]',
+            border_style='cyan',
+            padding=(0, 1),
+        ))
+
     # ── Private ───────────────────────────────────────────────────────────────
 
     def _refresh(self) -> None:

@@ -81,9 +81,10 @@ def run(ctx: PipelineContext) -> PipelineContext:
     if db_path.exists():
         db_path.unlink()
 
-    total_lines  = 0
-    parsed_count = 0
+    total_lines   = 0
+    parsed_count  = 0
     parser_stats: dict = {}
+    parser_file_map: dict = {}
     batch: List[ForensicEvent] = []
 
     with EventStore(db_path) as store:
@@ -108,6 +109,12 @@ def run(ctx: PipelineContext) -> PipelineContext:
                     parsed_count += len(events)
                     for e in events:
                         parser_stats[e.source] = parser_stats.get(e.source, 0) + 1
+                    parser_name = events[0].source
+                    if parser_name not in parser_file_map:
+                        parser_file_map[parser_name] = {'count': len(events), 'files': [str(lf)]}
+                    else:
+                        parser_file_map[parser_name]['count'] += len(events)
+                        parser_file_map[parser_name]['files'].append(str(lf))
                     if len(batch) >= _BATCH_SIZE:
                         store.insert_events(batch)
                         batch.clear()
@@ -121,6 +128,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
     ctx.events_db_path   = db_path
     ctx.parser_stats     = parser_stats
+    ctx.parser_file_map  = parser_file_map
+    ctx.all_parser_names = [p.name for p in ALL_PARSERS]
     ctx.total_log_lines  = total_lines
     ctx.parsed_events    = parsed_count
     ctx.events           = []  # Daten leben in events.db

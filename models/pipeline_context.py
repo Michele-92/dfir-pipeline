@@ -58,6 +58,8 @@ class PipelineContext:
     events:             List[ForensicEvent] = field(default_factory=list)
     events_db_path:     Optional[Path]      = None
     parser_stats:       Dict[str, int]      = field(default_factory=dict)
+    parser_file_map:    Dict[str, dict]     = field(default_factory=dict)
+    all_parser_names:   List[str]           = field(default_factory=list)
     total_log_lines:    int = 0
     parsed_events:      int = 0
     hayabusa_hits:      int = 0
