@@ -26,6 +26,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
     ctx.tsk_fallback_used = True
     ctx.ioc_quality       = 'MITTEL'
     results               = {}
+    total_log_extracted   = 0
 
     partitions = _read_partitions(ctx.disk_image_path)
     log.info(f'  {len(partitions)} Partitionen gefunden')
@@ -41,20 +42,41 @@ def run(ctx: PipelineContext) -> PipelineContext:
             part_result = _analyse_xfs(ctx.disk_image_path, offset)
         else:
             log.warning(f'  Unbekanntes Dateisystem: {fs_type} — übersprungen')
+            ctx.tsk_partitions.append({
+                'offset': offset, 'fs_type': fs_type, 'status': 'übersprungen', 'files': 0
+            })
             continue
 
+        # Gelöschte Dateien aus fls-Output zählen
+        deleted = sum(1 for e in part_result if '/-' in e.split('\t')[0] or e.startswith('* '))
+        ctx.tsk_deleted_found += deleted
+
         results[f'partition_{offset}'] = part_result
+        ctx.tsk_partitions.append({
+            'offset': offset, 'fs_type': fs_type,
+            'status': 'analysiert', 'files': len(part_result),
+            'deleted': deleted,
+        })
 
         if (fs_type in FS_TYPES or fs_type == 'xfs') and part_result and ctx.case_dir:
             log_dir = ctx.case_dir / 'raw' / 'log_artefakte'
-            n = _extract_log_files(ctx.disk_image_path, offset, part_result, log_dir, ctx.workers)
+            n, filenames = _extract_log_files(
+                ctx.disk_image_path, offset, part_result, log_dir, ctx.workers)
+            total_log_extracted += n
+            ctx.tsk_extracted_filenames.extend(filenames)
             log.info(f'  {n} Log-Dateien aus Partition {offset} extrahiert → {log_dir}')
 
-    ctx.tsk_results = results
+    ctx.tsk_results          = results
+    ctx.tsk_log_files_extracted = total_log_extracted
 
     out_dir = ctx.case_dir / 'raw' / 'disk_artefakte' if ctx.case_dir else Path('/tmp/tsk_out')
     out_dir.mkdir(parents=True, exist_ok=True)
     _recover_deleted(ctx.disk_image_path, out_dir)
+
+    # Wiederhergestellte Dateien zählen
+    recovered_files = [f for f in out_dir.rglob('*') if f.is_file()]
+    ctx.tsk_deleted_recovered     = len(recovered_files)
+    ctx.tsk_deleted_not_recovered = max(0, ctx.tsk_deleted_found - ctx.tsk_deleted_recovered)
 
     # Alle extrahierten Dateien hashen und in Chain of Custody eintragen
     if ctx.coc and ctx.case_dir:
@@ -62,9 +84,14 @@ def run(ctx: PipelineContext) -> PipelineContext:
         _hash_extracted_files(out_dir, ctx)
 
     log.info(f'  TSK: {sum(len(v) for v in results.values())} Einträge')
+    log.info(f'  Gelöscht gefunden: {ctx.tsk_deleted_found} | '
+             f'Wiederhergestellt: {ctx.tsk_deleted_recovered} | '
+             f'Nicht wiederherstellbar: {ctx.tsk_deleted_not_recovered}')
     if ctx.coc:
         ctx.coc.add_entry('stage_05',
-            f'TSK Fallback: {len(results)} Partitionen | '
+            f'TSK: {len(results)} Partitionen | '
+            f'{total_log_extracted} Log-Dateien | '
+            f'{ctx.tsk_deleted_recovered} gelöschte Dateien wiederhergestellt | '
             f'{len(ctx.coc.extracted_file_hashes)} Dateien gehasht')
     return ctx
 
@@ -149,12 +176,13 @@ def _icat_extract(args: Tuple) -> bool:
 
 
 def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str],
-                       log_dir: Path, workers: int = 2) -> int:
+                       log_dir: Path, workers: int = 2) -> Tuple[int, List[str]]:
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    # Phase 1: Relevante Einträge filtern und Dateinamen vorab eindeutig vergeben
     work_items: List[Tuple] = []
     used_names: set = set()
+    all_names:  List[str] = []
+
     for entry in fls_entries:
         if not any(kw in entry.lower() for kw in LOG_KEYWORDS):
             continue
@@ -173,11 +201,11 @@ def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str],
         if out_name in used_names:
             out_name = f'{inode}_{out_name}'
         used_names.add(out_name)
+        all_names.append(out_name)
         work_items.append((image_path, offset, inode, log_dir / out_name))
 
-    log.info(f'  {len(work_items):,} Log-relevante Einträge gefunden — starte Extraktion mit {workers} Threads...')
+    log.info(f'  {len(work_items):,} Log-relevante Einträge — starte Extraktion mit {workers} Threads...')
 
-    # Phase 2: Parallel extrahieren mit ThreadPoolExecutor
     extracted = 0
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(_icat_extract, item): item for item in work_items}
@@ -196,7 +224,7 @@ def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str],
             except Exception:
                 pass
 
-    return extracted
+    return extracted, all_names[:10]  # erste 10 Dateinamen für Anzeige
 
 
 def _analyse_xfs(image_path: Path, offset: int) -> List[str]:

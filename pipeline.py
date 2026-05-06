@@ -136,6 +136,7 @@ def main():
 
     # ── Abschluss-Zusammenfassung ─────────────────────────────────────────────
     ui.show_summary(ctx)
+    ui.show_stage05_detail(ctx)
     ui.show_stage08_detail(ctx)
     ui.show_parser_detail(ctx)
 

@@ -123,6 +123,45 @@ class PipelineUI:
             padding=(0, 1),
         ))
 
+    def show_stage05_detail(self, ctx) -> None:
+        t = Table(box=box.ROUNDED, show_header=False,
+                  border_style='cyan', expand=True)
+        t.add_column('Feld',  style='bold', min_width=30)
+        t.add_column('Wert',  style='white')
+
+        # Partitionen
+        for p in ctx.tsk_partitions:
+            status = '✅ analysiert' if p['status'] == 'analysiert' else '⏭  übersprungen'
+            info   = f"offset={p['offset']}  fs={p['fs_type']}"
+            if p['status'] == 'analysiert':
+                info += f"  →  {p['files']:,} Einträge  ({p.get('deleted', 0)} gelöscht)"
+            t.add_row(f"Partition {p['offset']}", f"{status}  {info}")
+
+        t.add_row('', '')
+        t.add_row('Log-Dateien extrahiert', f"{ctx.tsk_log_files_extracted:,}")
+
+        # Erste Dateinamen
+        for fname in ctx.tsk_extracted_filenames[:5]:
+            t.add_row('', f"  → {fname}")
+        if len(ctx.tsk_extracted_filenames) > 5:
+            t.add_row('', f"  ... ({len(ctx.tsk_extracted_filenames) - 5} weitere)")
+
+        t.add_row('', '')
+        t.add_row('Gelöschte Dateien gefunden',
+                  f"{ctx.tsk_deleted_found:,}")
+        t.add_row('✅ Wiederhergestellt',
+                  Text(f"{ctx.tsk_deleted_recovered:,}", style='bold green'))
+        t.add_row('❌ Nicht wiederherstellbar',
+                  Text(f"{ctx.tsk_deleted_not_recovered:,}  (Sektoren überschrieben)",
+                       style='bold red'))
+
+        console.print(Panel(
+            t,
+            title='[bold cyan]Stage 05 — Disk-Artefakt-Extraktion (TSK)[/bold cyan]',
+            border_style='cyan',
+            padding=(0, 1),
+        ))
+
     def show_stage08_detail(self, ctx) -> None:
         t = Table(box=box.ROUNDED, show_header=False,
                   border_style='cyan', expand=True)
