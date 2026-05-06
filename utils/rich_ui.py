@@ -254,6 +254,15 @@ class PipelineUI:
         t.add_row('Gesamt',       Text(f"{len(ctx.iocs):,} IOCs", style='bold'))
         t.add_row('Qualität',     Text(ctx.ioc_quality,
                   style='green' if ctx.ioc_quality == 'HOCH' else 'yellow'))
+        t.add_row('', '')
+        if ctx.bulk_extractor_ran:
+            t.add_row('Bulk-Extractor',
+                      Text(f'✅  {ctx.bulk_extractor_iocs:,} IOCs (direkt aus Image)',
+                           style='green'))
+        else:
+            t.add_row('Bulk-Extractor',
+                      Text('⚠️  nicht installiert — nur Regex-Extraktion',
+                           style='yellow'))
         console.print(Panel(t,
             title='[bold cyan]Stage 07 — IOC-Extraktion[/bold cyan]',
             border_style='cyan', padding=(0, 1)))

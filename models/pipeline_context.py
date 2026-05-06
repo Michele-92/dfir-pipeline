@@ -75,8 +75,10 @@ class PipelineContext:
     hayabusa_hits:      int = 0
 
     # ── Stage 7: IOC-Extraktion ───────────────────────────
-    iocs:               List[IOC] = field(default_factory=list)
-    ioc_quality:        str = 'HOCH'
+    iocs:                   List[IOC] = field(default_factory=list)
+    ioc_quality:            str  = 'HOCH'
+    bulk_extractor_ran:     bool = False
+    bulk_extractor_iocs:    int  = 0
 
     # ── Stage 8: Normalisierung ───────────────────────────
     normalized_events:  List[ForensicEvent] = field(default_factory=list)
