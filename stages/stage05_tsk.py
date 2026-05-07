@@ -254,48 +254,79 @@ def _analyse_xfs(image_path: Path, offset: int) -> List[str]:
 
 def _generate_mactime_streaming(image_path: Path, offset: int,
                                 db_path: Path, ctx) -> None:
-    """Streamt MACtime direkt in DuckDB — kein mactime-Tool nötig."""
+    """Streamt MACtime via mactime-Tool direkt in DuckDB — kein RAM-Problem."""
+    import re
     from datetime import datetime, timezone
     from models.event import ForensicEvent
     from utils.event_store import EventStore
 
+    # mactime CSV-Format: date,size,type,mode,uid,gid,inode,filename
+    RE = re.compile(
+        r'^(?P<date>\w{3} \w{3}\s+\d+ \d{4} \d{2}:\d{2}:\d{2}),'
+        r'(?P<size>\d+),'
+        r'(?P<macb>[macb\.]+),'
+        r'(?P<mode>[^,]+),'
+        r'(?P<uid>\d+),'
+        r'(?P<gid>\d+),'
+        r'(?P<inode>[^,]+),'
+        r'(?P<filename>.+)$'
+    )
+
     try:
+        # Schritt 1: fls -m generiert Body-File
         fls = subprocess.run(
             ['fls', '-m', '/', '-r', '-o', str(offset), str(image_path)],
             capture_output=True, timeout=600, errors='replace', text=True,
         )
         if not fls.stdout:
+            log.warning('  MACtime: fls -m lieferte kein Output')
             return
 
+        # Schritt 2: mactime konvertiert Body-File → Timeline
+        mt = subprocess.run(
+            ['mactime', '-b', '-'],
+            input=fls.stdout,
+            capture_output=True, text=True, timeout=300,
+            errors='replace',
+        )
+        if not mt.stdout:
+            log.warning('  MACtime: mactime lieferte kein Output')
+            return
+
+        # Schritt 3: Zeile für Zeile in DuckDB streamen
+        db_path.parent.mkdir(parents=True, exist_ok=True)
         batch = []
         count = 0
+
         with EventStore(db_path) as store:
-            for line in fls.stdout.splitlines():
-                # Body-File Format: md5|name|inode|mode|uid|gid|size|atime|mtime|ctime|crtime
+            for line in mt.stdout.splitlines():
                 if not line or line.startswith('#'):
                     continue
-                parts = line.split('|')
-                if len(parts) < 11:
+                m = RE.match(line)
+                if not m:
                     continue
                 try:
-                    filename = parts[1].strip()
-                    size     = parts[6].strip()
-                    mtime    = int(parts[8]) if parts[8].strip().isdigit() else 0
-                    if mtime == 0:
-                        continue
-                    ts = datetime.fromtimestamp(mtime, tz=timezone.utc)
-                except (ValueError, IndexError):
+                    ts = datetime.strptime(
+                        m.group('date').strip(), '%a %b %d %Y %H:%M:%S'
+                    ).replace(tzinfo=timezone.utc)
+                except ValueError:
                     continue
+
+                filename = m.group('filename').strip()
+                macb     = m.group('macb')
+                size     = m.group('size')
 
                 severity = 'info'
                 if any(s in filename for s in ['/tmp/', '/var/tmp/', '/dev/shm']):
                     severity = 'medium'
+                if filename.startswith('* '):
+                    severity = 'high'
 
                 batch.append(ForensicEvent(
                     timestamp  = ts,
                     source     = 'mactime',
-                    event_type = 'filesystem_modified',
-                    message    = f'{filename} ({size} bytes)',
+                    event_type = f'filesystem_{macb.replace(".", "").strip() or "access"}',
+                    message    = f'[{macb}] {filename} ({size} bytes)',
                     file_path  = filename,
                     severity   = severity,
                 ))
