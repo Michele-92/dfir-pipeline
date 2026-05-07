@@ -20,35 +20,8 @@ class PlasaFallbackParser(BaseParser):
         return True  # Fallback — nimmt alles
 
     def parse(self, path: Path) -> List[ForensicEvent]:
-        events = []
-        try:
-            result = subprocess.run(
-                ['log2timeline.py', '--status_view', 'none',
-                 '--logfile', '/dev/null', '/tmp/plaso_out.plaso', str(path)],
-                capture_output=True, timeout=300
-            )
-            if result.returncode != 0:
-                raise RuntimeError('log2timeline fehlgeschlagen')
-            psort = subprocess.run(
-                ['psort.py', '-o', 'json_line', '/tmp/plaso_out.plaso'],
-                capture_output=True, text=True, timeout=300
-            )
-            for line in psort.stdout.splitlines():
-                try:
-                    entry = json.loads(line)
-                    ts    = entry.get('datetime', '')
-                    msg   = entry.get('message', '')
-                    src   = entry.get('source_long', 'plaso')
-                    events.append(self.make_event(
-                        ts, 'plaso', 'generic_event', msg,
-                        severity='info', raw=entry
-                    ))
-                except (json.JSONDecodeError, AttributeError):
-                    continue
-        except (FileNotFoundError, subprocess.TimeoutExpired, RuntimeError) as e:
-            log.debug(f'Plaso nicht verfügbar oder Fehler: {e}')
-            events = self._text_fallback(path)
-        return events
+        # log2timeline zu schwer für Datei-für-Datei Parsing — direkt text_fallback
+        return self._text_fallback(path)
 
     def _text_fallback(self, path: Path) -> List[ForensicEvent]:
         events = []
