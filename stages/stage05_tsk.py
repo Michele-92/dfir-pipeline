@@ -12,6 +12,12 @@ log = logging.getLogger(__name__)
 
 FS_TYPES = ['ntfs', 'fat32', 'exfat', 'ext4', 'ext3', 'ext2']
 
+# TSK 4.15.0 aus Source bevorzugen — erkennt mehr Dateisysteme als GIFT-Version
+_TSK_PREFIX = '/usr/local/bin/'
+def _tsk(cmd: str) -> str:
+    local = Path(f'{_TSK_PREFIX}{cmd}')
+    return str(local) if local.exists() else cmd
+
 LOG_KEYWORDS = [
     'var/log', 'bash_history', 'zsh_history', 'fish_history',
     'auth.log', 'syslog', 'kern.log', 'messages', 'secure',
@@ -78,15 +84,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
     ctx.tsk_deleted_recovered     = len(recovered_files)
     ctx.tsk_deleted_not_recovered = max(0, ctx.tsk_deleted_found - ctx.tsk_deleted_recovered)
 
-    # MACtime-Timeline generieren (optional) — Streaming direkt in DuckDB
-    if ctx.case_dir and not ctx.skip_mactime:
-        db_path = ctx.output_dir / 'events.db'
-        for part in ctx.tsk_partitions:
-            if part['status'] == 'analysiert':
-                _generate_mactime_streaming(
-                    ctx.disk_image_path, part['offset'], db_path, ctx)
-                _run_sorter(ctx.disk_image_path, part['offset'],
-                            ctx.case_dir / 'raw' / 'sorter_output', ctx)
+    # MACtime wird NACH Stage 6 aufgerufen (via run_mactime_after_stage6)
+    # damit events.db bereits existiert und nicht überschrieben wird
 
     # Alle extrahierten Dateien hashen und in Chain of Custody eintragen
     if ctx.coc and ctx.case_dir:
@@ -103,6 +102,19 @@ def run(ctx: PipelineContext) -> PipelineContext:
             f'{total_log_extracted} Log-Dateien | '
             f'{ctx.tsk_deleted_recovered} gelöschte Dateien wiederhergestellt | '
             f'{len(ctx.coc.extracted_file_hashes)} Dateien gehasht')
+    return ctx
+
+
+def run_mactime_after_stage6(ctx: PipelineContext) -> PipelineContext:
+    """Wird nach Stage 6 aufgerufen — events.db existiert dann bereits."""
+    if ctx.skip_mactime or not ctx.disk_image_path or not ctx.events_db_path:
+        return ctx
+    for part in ctx.tsk_partitions:
+        if part['status'] == 'analysiert':
+            _generate_mactime_streaming(
+                ctx.disk_image_path, part['offset'], ctx.events_db_path, ctx)
+            _run_sorter(ctx.disk_image_path, part['offset'],
+                        ctx.case_dir / 'raw' / 'sorter_output', ctx)
     return ctx
 
 
@@ -123,7 +135,7 @@ def _read_partitions(image_path: Path) -> List[dict]:
     partitions = []
     try:
         result = subprocess.run(
-            ['mmls', str(image_path)],
+            [_tsk('mmls'), str(image_path)],
             capture_output=True, text=True, timeout=60
         )
         for line in result.stdout.splitlines():
@@ -145,7 +157,7 @@ def _read_partitions(image_path: Path) -> List[dict]:
 def _detect_filesystem(image_path: Path, offset: int) -> str:
     try:
         result = subprocess.run(
-            ['fsstat', '-o', str(offset), str(image_path)],
+            [_tsk('fsstat'), '-o', str(offset), str(image_path)],
             capture_output=True, text=True, timeout=30, errors='replace'
         )
         output = result.stdout.lower()
@@ -161,7 +173,7 @@ def _analyse_partition(image_path: Path, offset: int, fs_type: str) -> List[str]
     entries = []
     try:
         result = subprocess.run(
-            ['fls', '-r', '-o', str(offset), str(image_path)],
+            [_tsk('fls'), '-r', '-o', str(offset), str(image_path)],
             capture_output=True, text=True, timeout=300, errors='replace'
         )
         entries = [l for l in result.stdout.splitlines() if l.strip()]
@@ -174,7 +186,7 @@ def _icat_extract(args: Tuple) -> bool:
     image_path, offset, inode, out_file = args
     try:
         result = subprocess.run(
-            ['icat', '-o', str(offset), str(image_path), inode],
+            [_tsk('icat'), '-o', str(offset), str(image_path), inode],
             capture_output=True, timeout=30
         )
         if result.stdout:
@@ -241,7 +253,7 @@ def _analyse_xfs(image_path: Path, offset: int) -> List[str]:
     # fls unterstützt XFS — gleicher Output wie _analyse_partition, daher icat-kompatibel
     try:
         result = subprocess.run(
-            ['fls', '-r', '-o', str(offset), str(image_path)],
+            [_tsk('fls'), '-r', '-o', str(offset), str(image_path)],
             capture_output=True, text=True, timeout=300, errors='replace'
         )
         entries = [l for l in result.stdout.splitlines() if l.strip()]
@@ -275,7 +287,7 @@ def _generate_mactime_streaming(image_path: Path, offset: int,
     try:
         # Schritt 1: fls -m generiert Body-File
         fls = subprocess.run(
-            ['fls', '-m', '/', '-r', '-o', str(offset), str(image_path)],
+            [_tsk('fls'), '-m', '/', '-r', '-o', str(offset), str(image_path)],
             capture_output=True, timeout=600, errors='replace', text=True,
         )
         if not fls.stdout:
@@ -354,7 +366,7 @@ def _generate_mactime(image_path: Path, offset: int,
     try:
         # fls -m erzeugt Body-File mit allen Timestamps
         result = subprocess.run(
-            ['fls', '-m', '/', '-r', '-o', str(offset), str(image_path)],
+            [_tsk('fls'), '-m', '/', '-r', '-o', str(offset), str(image_path)],
             capture_output=True, text=True, timeout=600, errors='replace'
         )
         if result.stdout:
@@ -381,7 +393,7 @@ def _run_sorter(image_path: Path, offset: int,
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
         result = subprocess.run(
-            ['sorter', '-o', str(offset), '-d', str(out_dir), str(image_path)],
+            [_tsk('sorter'), '-o', str(offset), '-d', str(out_dir), str(image_path)],
             capture_output=True, text=True, timeout=300, errors='replace'
         )
         categories: Dict[str, int] = {}
@@ -404,7 +416,7 @@ def _run_sorter(image_path: Path, offset: int,
 def _recover_deleted(image_path: Path, out_dir: Path) -> None:
     try:
         subprocess.run(
-            ['tsk_recover', str(image_path), str(out_dir)],
+            [_tsk('tsk_recover'), str(image_path), str(out_dir)],
             capture_output=True, timeout=600
         )
         log.info(f'  Gelöschte Dateien wiederhergestellt → {out_dir}')

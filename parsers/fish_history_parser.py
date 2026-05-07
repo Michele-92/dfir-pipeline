@@ -17,7 +17,7 @@ class FishHistoryParser(BaseParser):
     file_patterns = ['fish_history']
 
     def can_parse(self, path: Path) -> bool:
-        return path.name == 'fish_history'
+        return 'fish_history' in path.name.lower()
 
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []

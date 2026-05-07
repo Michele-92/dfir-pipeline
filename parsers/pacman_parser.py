@@ -13,7 +13,7 @@ class PacmanParser(BaseParser):
     file_patterns = ['pacman.log']
 
     def can_parse(self, path: Path) -> bool:
-        return path.name == 'pacman.log'
+        return 'pacman' in path.name.lower()
 
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []

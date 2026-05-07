@@ -16,7 +16,7 @@ class BashHistoryParser(BaseParser):
     file_patterns = ['.bash_history']
 
     def can_parse(self, path: Path) -> bool:
-        return path.name == '.bash_history'
+        return 'bash_history' in path.name.lower()
 
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []

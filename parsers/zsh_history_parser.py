@@ -16,7 +16,7 @@ class ZshHistoryParser(BaseParser):
     file_patterns = ['.zsh_history']
 
     def can_parse(self, path: Path) -> bool:
-        return path.name == '.zsh_history'
+        return 'zsh_history' in path.name.lower()
 
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []

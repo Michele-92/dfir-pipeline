@@ -10,7 +10,7 @@ class UtmpParser(WtmpParser):
     file_patterns = ['utmp']
 
     def can_parse(self, path: Path) -> bool:
-        return path.name == 'utmp'
+        return 'utmp' in path.name.lower()
 
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = super().parse(path)

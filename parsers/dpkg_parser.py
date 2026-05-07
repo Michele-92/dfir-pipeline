@@ -18,7 +18,7 @@ class DpkgParser(BaseParser):
     file_patterns = ['dpkg.log', 'dpkg.log.*']
 
     def can_parse(self, path: Path) -> bool:
-        return path.name.startswith('dpkg.log')
+        return 'dpkg' in path.name.lower() and path.suffix in ('.log', '.1', '')
 
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []

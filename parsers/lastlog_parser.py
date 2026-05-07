@@ -16,7 +16,7 @@ class LastlogParser(BaseParser):
     binary        = True
 
     def can_parse(self, path: Path) -> bool:
-        return path.name == 'lastlog'
+        return 'lastlog' in path.name.lower()
 
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []

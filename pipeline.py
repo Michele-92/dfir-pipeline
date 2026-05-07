@@ -137,6 +137,8 @@ def main():
 
         ctx = run_stage(stage06_logs.run,          ctx, 'stage_06',   ui)
         ui.show_parser_detail(ctx)
+        # MACtime nach Stage 6 — events.db existiert jetzt
+        ctx = stage05_tsk.run_mactime_after_stage6(ctx)
 
         ctx = run_stage(stage07_ioc.run,           ctx, 'stage_07',   ui)
         ui.show_stage07_detail(ctx)
