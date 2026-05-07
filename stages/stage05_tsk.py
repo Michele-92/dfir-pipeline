@@ -78,12 +78,13 @@ def run(ctx: PipelineContext) -> PipelineContext:
     ctx.tsk_deleted_recovered     = len(recovered_files)
     ctx.tsk_deleted_not_recovered = max(0, ctx.tsk_deleted_found - ctx.tsk_deleted_recovered)
 
-    # MACtime-Timeline generieren (optional)
+    # MACtime-Timeline generieren (optional) — Streaming direkt in DuckDB
     if ctx.case_dir and not ctx.skip_mactime:
-        log_dir = ctx.case_dir / 'raw' / 'log_artefakte'
+        db_path = ctx.output_dir / 'events.db'
         for part in ctx.tsk_partitions:
             if part['status'] == 'analysiert':
-                _generate_mactime(ctx.disk_image_path, part['offset'], log_dir, ctx)
+                _generate_mactime_streaming(
+                    ctx.disk_image_path, part['offset'], db_path, ctx)
                 _run_sorter(ctx.disk_image_path, part['offset'],
                             ctx.case_dir / 'raw' / 'sorter_output', ctx)
 
@@ -249,6 +250,87 @@ def _analyse_xfs(image_path: Path, offset: int) -> List[str]:
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         log.warning(f'  fls für XFS fehlgeschlagen: {e}')
     return []
+
+
+def _generate_mactime_streaming(image_path: Path, offset: int,
+                                db_path: Path, ctx) -> None:
+    """Streamt MACtime direkt in DuckDB — kein RAM-Problem."""
+    import re
+    from datetime import datetime, timezone
+    from models.event import ForensicEvent
+    from utils.event_store import EventStore
+
+    RE = re.compile(
+        r'^(?P<date>\w{3} \w{3}\s+\d+ \d{4} \d{2}:\d{2}:\d{2}),'
+        r'(?P<size>\d+),'
+        r'(?P<macb>[macb\.]+),'
+        r'[^,]+,[^,]+,[^,]+,[^,]+,'
+        r'(?P<filename>.+)$'
+    )
+
+    try:
+        fls = subprocess.run(
+            ['fls', '-m', '/', '-r', '-o', str(offset), str(image_path)],
+            capture_output=True, timeout=600, errors='replace',
+            text=True,
+        )
+        if not fls.stdout:
+            return
+
+        mactime = subprocess.run(
+            ['mactime', '-b', '-'],
+            input=fls.stdout,
+            capture_output=True, text=True, timeout=120
+        )
+        if not mactime.stdout:
+            return
+
+        batch = []
+        count = 0
+        with EventStore(db_path) as store:
+            for line in mactime.stdout.splitlines():
+                if not line or line.startswith('#'):
+                    continue
+                m = RE.match(line)
+                if not m:
+                    continue
+                try:
+                    ts = datetime.strptime(
+                        m.group('date').strip(), '%a %b %d %Y %H:%M:%S'
+                    ).replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+
+                filename = m.group('filename').strip()
+                macb     = m.group('macb')
+                size     = m.group('size')
+
+                severity = 'info'
+                if any(s in filename for s in ['/tmp/', '/var/tmp/', '/dev/shm']):
+                    severity = 'medium'
+
+                batch.append(ForensicEvent(
+                    timestamp  = ts,
+                    source     = 'mactime',
+                    event_type = f'filesystem',
+                    message    = f'[{macb}] {filename} ({size} bytes)',
+                    file_path  = filename,
+                    severity   = severity,
+                ))
+                count += 1
+
+                if len(batch) >= 1000:
+                    store.insert_events(batch)
+                    batch.clear()
+
+            if batch:
+                store.insert_events(batch)
+
+        ctx.tsk_mactime_events = count
+        log.info(f'  MACtime Streaming: {count:,} Events direkt in DuckDB')
+
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log.warning(f'  MACtime Streaming fehlgeschlagen: {e}')
 
 
 def _generate_mactime(image_path: Path, offset: int,

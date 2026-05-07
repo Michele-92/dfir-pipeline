@@ -22,7 +22,6 @@ from parsers import (
     BashHistoryParser, ZshHistoryParser, FishHistoryParser,
     PostfixMailParser, FTPParser, SambaParser, OpenVPNParser,
     DockerParser, ContainerdParser, IISLogParser, PlasaFallbackParser,
-    MACTimeParser,
 )
 
 log = logging.getLogger(__name__)
@@ -65,7 +64,6 @@ ALL_PARSERS = [
     DockerParser(),
     ContainerdParser(),
     IISLogParser(),
-    MACTimeParser(),
     PlasaFallbackParser(),
 ]
 
