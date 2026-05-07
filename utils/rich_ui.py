@@ -1,4 +1,5 @@
 import time
+import threading
 from typing import Dict, Optional
 
 from rich import box
@@ -47,6 +48,8 @@ class PipelineUI:
         self._live:        Optional[Live] = None
         self._spin_idx     = 0
         self._start        = time.time()
+        self._timer_thread: Optional[threading.Thread] = None
+        self._running      = False
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -59,8 +62,17 @@ class PipelineUI:
             redirect_stdout=True,
         )
         self._live.start()
+        self._running = True
+        self._timer_thread = threading.Thread(target=self._timer_loop, daemon=True)
+        self._timer_thread.start()
+
+    def _timer_loop(self) -> None:
+        while self._running:
+            self._refresh()
+            time.sleep(1)
 
     def stop(self) -> None:
+        self._running = False
         if self._live:
             self._live.update(self._render())
             self._live.stop()
