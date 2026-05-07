@@ -35,7 +35,9 @@ class PipelineContext:
     log_paths:          Dict[str, Path] = field(default_factory=dict)
 
     # ── Performance ───────────────────────────────────────
-    workers:            int = 2
+    workers:             int  = 2
+    skip_bulk_extractor: bool = False
+    skip_mactime:        bool = False
 
     # ── Stage 4: Disk ─────────────────────────────────────
     disk_artifacts:     Dict[str, Any] = field(default_factory=dict)

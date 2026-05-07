@@ -42,8 +42,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
     iocs: List[IOC] = []
     seen = set()
 
-    # ── Bulk-Extractor (primär) ────────────────────────────────────────────
-    if ctx.disk_image_path and ctx.case_dir:
+    # ── Bulk-Extractor (primär, optional) ─────────────────────────────────
+    if ctx.disk_image_path and ctx.case_dir and not ctx.skip_bulk_extractor:
         bulk_dir = ctx.case_dir / 'raw' / 'bulk_extractor'
         bulk_iocs = _run_bulk_extractor(ctx.disk_image_path, bulk_dir, ctx)
         for ioc in bulk_iocs:

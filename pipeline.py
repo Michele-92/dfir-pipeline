@@ -87,9 +87,11 @@ def main():
     parser.add_argument('--output_dir',    default='./output', help='Ausgabe-Verzeichnis')
     parser.add_argument('--force-autopsy', action='store_true', help='Autopsy erzwingen')
     parser.add_argument('--no-autopsy',    action='store_true', help='Autopsy deaktivieren')
-    parser.add_argument('--no-timesketch', action='store_true', help='Timesketch-Upload deaktivieren')
-    parser.add_argument('--debug',         action='store_true', help='Debug-Logging aktivieren')
-    parser.add_argument('--workers',       type=int, default=2,
+    parser.add_argument('--no-timesketch',     action='store_true', help='Timesketch-Upload deaktivieren')
+    parser.add_argument('--no-bulk-extractor', action='store_true', help='Bulk-Extractor deaktivieren')
+    parser.add_argument('--no-mactime',        action='store_true', help='MACtime + Sorter deaktivieren')
+    parser.add_argument('--debug',             action='store_true', help='Debug-Logging aktivieren')
+    parser.add_argument('--workers',           type=int, default=2,
                         help='Anzahl paralleler Worker für Stage 6 + Stage 5 (Standard: 2)')
     args = parser.parse_args()
 
@@ -107,6 +109,8 @@ def main():
         logs_dir_path   = Path(args.logs) if args.logs else None,
         output_dir      = Path(args.output_dir),
         workers         = args.workers,
+        skip_bulk_extractor = args.no_bulk_extractor,
+        skip_mactime        = args.no_mactime,
     )
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -114,39 +118,52 @@ def main():
     ui.start()
 
     try:
-        # ── Pipeline ausführen ────────────────────────────────────────────────
+        # ── Pipeline ausführen — Panel direkt nach jeder Stage ────────────────
         ctx = run_stage(stage01_detection.run,     ctx, 'stage_01',   ui)
+        ui.show_stage01_detail(ctx)
+
         ctx = run_stage(stage02_memory.run,        ctx, 'stage_02',   ui)
+        ui.show_stage02_detail(ctx)
+
         ctx = run_stage(stage03_profiling.run,     ctx, 'stage_03',   ui)
+        ui.show_stage03_detail(ctx)
+
         ctx = run_stage(stage04_disk.run,          ctx, 'stage_04',   ui)
         ctx = run_stage(stage04_1_autopsy.run,     ctx, 'stage_04_1', ui,
                         force=args.force_autopsy, skip=args.no_autopsy)
+
         ctx = run_stage(stage05_tsk.run,           ctx, 'stage_05',   ui)
+        ui.show_stage05_detail(ctx)
+
         ctx = run_stage(stage06_logs.run,          ctx, 'stage_06',   ui)
+        ui.show_parser_detail(ctx)
+
         ctx = run_stage(stage07_ioc.run,           ctx, 'stage_07',   ui)
+        ui.show_stage07_detail(ctx)
+
         ctx = run_stage(stage08_normalize.run,     ctx, 'stage_08',   ui)
+        ui.show_stage08_detail(ctx)
+
         ctx = run_stage(stage09_antiforensics.run, ctx, 'stage_09',   ui)
+        ui.show_stage09_detail(ctx)
+
         ctx = run_stage(stage10_ml.run,            ctx, 'stage_10',   ui)
         ctx = run_stage(stage11_mitre.run,         ctx, 'stage_11',   ui)
+
         ctx = run_stage(stage12_aggregation.run,   ctx, 'stage_12',   ui)
+        ui.show_stage12_detail(ctx)
+
         ctx = run_stage(stage13_quality.run,       ctx, 'stage_13',   ui)
+        ui.show_stage13_detail(ctx)
+
         ctx = run_stage(stage14_export.run,        ctx, 'stage_14',   ui)
+        ui.show_stage14_detail(ctx)
+
     finally:
         ui.stop()
 
     # ── Abschluss-Zusammenfassung ─────────────────────────────────────────────
     ui.show_summary(ctx)
-    ui.show_stage01_detail(ctx)
-    ui.show_stage02_detail(ctx)
-    ui.show_stage03_detail(ctx)
-    ui.show_stage05_detail(ctx)
-    ui.show_parser_detail(ctx)
-    ui.show_stage07_detail(ctx)
-    ui.show_stage08_detail(ctx)
-    ui.show_stage09_detail(ctx)
-    ui.show_stage12_detail(ctx)
-    ui.show_stage13_detail(ctx)
-    ui.show_stage14_detail(ctx)
 
     return 0 if not ctx.stage_errors else 1
 

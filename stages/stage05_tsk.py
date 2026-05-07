@@ -78,8 +78,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
     ctx.tsk_deleted_recovered     = len(recovered_files)
     ctx.tsk_deleted_not_recovered = max(0, ctx.tsk_deleted_found - ctx.tsk_deleted_recovered)
 
-    # MACtime-Timeline generieren
-    if ctx.case_dir:
+    # MACtime-Timeline generieren (optional)
+    if ctx.case_dir and not ctx.skip_mactime:
         log_dir = ctx.case_dir / 'raw' / 'log_artefakte'
         for part in ctx.tsk_partitions:
             if part['status'] == 'analysiert':
