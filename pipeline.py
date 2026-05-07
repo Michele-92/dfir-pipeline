@@ -133,13 +133,13 @@ def main():
                         force=args.force_autopsy, skip=args.no_autopsy)
 
         ctx = run_stage(stage05_tsk.run,           ctx, 'stage_05',   ui)
+        ui.show_stage05_detail(ctx)  # Partitionen + Log-Dateien sofort sichtbar
 
         ctx = run_stage(stage06_logs.run,          ctx, 'stage_06',   ui)
         ui.show_parser_detail(ctx)
         # MACtime + Sorter nach Stage 6 — events.db existiert jetzt
         ctx = stage05_tsk.run_mactime_after_stage6(ctx)
-        # Stage 05 Panel erst jetzt zeigen — MACtime/Sorter Ergebnisse sind dann drin
-        ui.show_stage05_detail(ctx)
+        ui.show_stage05_detail(ctx)  # Zweites Panel — jetzt mit MACtime/Sorter
 
         ctx = run_stage(stage07_ioc.run,           ctx, 'stage_07',   ui)
         ui.show_stage07_detail(ctx)
