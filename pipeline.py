@@ -139,7 +139,7 @@ def main():
         ui.show_parser_detail(ctx)
         # MACtime + Sorter nach Stage 6 — events.db existiert jetzt
         ctx = stage05_tsk.run_mactime_after_stage6(ctx)
-        ui.show_stage05_detail(ctx)  # Zweites Panel — jetzt mit MACtime/Sorter
+        ui.show_mactime_sorter_detail(ctx)
 
         ctx = run_stage(stage07_ioc.run,           ctx, 'stage_07',   ui)
         ui.show_stage07_detail(ctx)

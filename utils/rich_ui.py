@@ -188,11 +188,9 @@ class PipelineUI:
         t.add_row('', '')
         t.add_row('Log-Dateien extrahiert', f"{ctx.tsk_log_files_extracted:,}")
 
-        # Erste Dateinamen
-        for fname in ctx.tsk_extracted_filenames[:5]:
+        # Alle Dateinamen anzeigen
+        for fname in ctx.tsk_extracted_filenames:
             t.add_row('', f"  → {fname}")
-        if len(ctx.tsk_extracted_filenames) > 5:
-            t.add_row('', f"  ... ({len(ctx.tsk_extracted_filenames) - 5} weitere)")
 
         t.add_row('', '')
         t.add_row('Gelöschte Dateien gefunden',
@@ -203,8 +201,19 @@ class PipelineUI:
                   Text(f"{ctx.tsk_deleted_not_recovered:,}  (Sektoren überschrieben)",
                        style='bold red'))
 
-        # MACtime
-        t.add_row('', '')
+        console.print(Panel(
+            t,
+            title='[bold cyan]Stage 05 — Disk-Artefakt-Extraktion (TSK)[/bold cyan]',
+            border_style='cyan',
+            padding=(0, 1),
+        ))
+
+    def show_mactime_sorter_detail(self, ctx) -> None:
+        t = Table(box=box.ROUNDED, show_header=False,
+                  border_style='cyan', expand=True)
+        t.add_column('Feld', style='bold', min_width=22)
+        t.add_column('Wert', style='white')
+
         if ctx.tsk_mactime_events:
             t.add_row('MACtime-Timeline',
                       Text(f'✅  {ctx.tsk_mactime_events:,} Einträge', style='green'))
@@ -212,12 +221,8 @@ class PipelineUI:
             t.add_row('MACtime-Timeline',
                       Text('❌  mactime nicht verfügbar', style='dim'))
 
-        # Sorter
         if ctx.tsk_sorter_ran and ctx.tsk_sorter_categories:
-            t.add_row('Sorter-Kategorien', f'{len(ctx.tsk_sorter_categories)}')
-            for cat, count in sorted(ctx.tsk_sorter_categories.items(),
-                                     key=lambda x: -x[1])[:5]:
-                t.add_row(f'  {cat}', f'{count:,} Dateien')
+            t.add_row('Sorter', Text(f'✅  {len(ctx.tsk_sorter_categories)} Kategorien', style='green'))
         elif ctx.tsk_sorter_ran:
             t.add_row('Sorter', Text('✅  gelaufen', style='green'))
         else:
@@ -225,7 +230,7 @@ class PipelineUI:
 
         console.print(Panel(
             t,
-            title='[bold cyan]Stage 05 — Disk-Artefakt-Extraktion (TSK)[/bold cyan]',
+            title='[bold cyan]MACtime & Sorter[/bold cyan]',
             border_style='cyan',
             padding=(0, 1),
         ))
