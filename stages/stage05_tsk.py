@@ -296,7 +296,7 @@ def _generate_mactime_streaming(image_path: Path, offset: int,
 
         # Schritt 2: mactime konvertiert Body-File → Timeline
         mt = subprocess.run(
-            ['mactime', '-b', '-'],
+            [_tsk('mactime'), '-b', '-'],
             input=fls.stdout,
             capture_output=True, text=True, timeout=300,
             errors='replace',
