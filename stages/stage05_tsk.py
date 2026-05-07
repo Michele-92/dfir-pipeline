@@ -254,56 +254,38 @@ def _analyse_xfs(image_path: Path, offset: int) -> List[str]:
 
 def _generate_mactime_streaming(image_path: Path, offset: int,
                                 db_path: Path, ctx) -> None:
-    """Streamt MACtime direkt in DuckDB — kein RAM-Problem."""
-    import re
+    """Streamt MACtime direkt in DuckDB — kein mactime-Tool nötig."""
     from datetime import datetime, timezone
     from models.event import ForensicEvent
     from utils.event_store import EventStore
 
-    RE = re.compile(
-        r'^(?P<date>\w{3} \w{3}\s+\d+ \d{4} \d{2}:\d{2}:\d{2}),'
-        r'(?P<size>\d+),'
-        r'(?P<macb>[macb\.]+),'
-        r'[^,]+,[^,]+,[^,]+,[^,]+,'
-        r'(?P<filename>.+)$'
-    )
-
     try:
         fls = subprocess.run(
             ['fls', '-m', '/', '-r', '-o', str(offset), str(image_path)],
-            capture_output=True, timeout=600, errors='replace',
-            text=True,
+            capture_output=True, timeout=600, errors='replace', text=True,
         )
         if not fls.stdout:
-            return
-
-        mactime = subprocess.run(
-            ['mactime', '-b', '-'],
-            input=fls.stdout,
-            capture_output=True, text=True, timeout=120
-        )
-        if not mactime.stdout:
             return
 
         batch = []
         count = 0
         with EventStore(db_path) as store:
-            for line in mactime.stdout.splitlines():
+            for line in fls.stdout.splitlines():
+                # Body-File Format: md5|name|inode|mode|uid|gid|size|atime|mtime|ctime|crtime
                 if not line or line.startswith('#'):
                     continue
-                m = RE.match(line)
-                if not m:
+                parts = line.split('|')
+                if len(parts) < 11:
                     continue
                 try:
-                    ts = datetime.strptime(
-                        m.group('date').strip(), '%a %b %d %Y %H:%M:%S'
-                    ).replace(tzinfo=timezone.utc)
-                except ValueError:
+                    filename = parts[1].strip()
+                    size     = parts[6].strip()
+                    mtime    = int(parts[8]) if parts[8].strip().isdigit() else 0
+                    if mtime == 0:
+                        continue
+                    ts = datetime.fromtimestamp(mtime, tz=timezone.utc)
+                except (ValueError, IndexError):
                     continue
-
-                filename = m.group('filename').strip()
-                macb     = m.group('macb')
-                size     = m.group('size')
 
                 severity = 'info'
                 if any(s in filename for s in ['/tmp/', '/var/tmp/', '/dev/shm']):
@@ -312,8 +294,8 @@ def _generate_mactime_streaming(image_path: Path, offset: int,
                 batch.append(ForensicEvent(
                     timestamp  = ts,
                     source     = 'mactime',
-                    event_type = f'filesystem',
-                    message    = f'[{macb}] {filename} ({size} bytes)',
+                    event_type = 'filesystem_modified',
+                    message    = f'{filename} ({size} bytes)',
                     file_path  = filename,
                     severity   = severity,
                 ))
