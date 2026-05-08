@@ -272,15 +272,15 @@ def _generate_mactime_streaming(image_path: Path, offset: int,
     from models.event import ForensicEvent
     from utils.event_store import EventStore
 
-    # mactime CSV-Format: date,size,type,mode,uid,gid,inode,filename
+    # mactime Space-Format: date   size macb mode uid gid inode   filename
     RE = re.compile(
-        r'^(?P<date>\w{3} \w{3}\s+\d+ \d{4} \d{2}:\d{2}:\d{2}),'
-        r'(?P<size>\d+),'
-        r'(?P<macb>[macb\.]+),'
-        r'(?P<mode>[^,]+),'
-        r'(?P<uid>\d+),'
-        r'(?P<gid>\d+),'
-        r'(?P<inode>[^,]+),'
+        r'^(?P<date>\w{3} \w{3}\s+\d+ \d{4} \d{2}:\d{2}:\d{2})\s+'
+        r'(?P<size>\d+)\s+'
+        r'(?P<macb>[macb\.]+)\s+'
+        r'(?P<mode>\S+)\s+'
+        r'(?P<uid>\d+)\s+'
+        r'(?P<gid>\d+)\s+'
+        r'(?P<inode>\S+)\s+'
         r'(?P<filename>.+)$'
     )
 
