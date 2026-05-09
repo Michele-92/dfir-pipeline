@@ -128,9 +128,9 @@ def main():
         ctx = run_stage(stage03_profiling.run,     ctx, 'stage_03',   ui)
         ui.show_stage03_detail(ctx)
 
-        ctx = run_stage(stage04_disk.run,          ctx, 'stage_04',   ui)
-        ctx = run_stage(stage04_1_autopsy.run,     ctx, 'stage_04_1', ui,
-                        force=args.force_autopsy, skip=args.no_autopsy)
+        # ctx = run_stage(stage04_disk.run,          ctx, 'stage_04',   ui)
+        # ctx = run_stage(stage04_1_autopsy.run,     ctx, 'stage_04_1', ui,
+        #                 force=args.force_autopsy, skip=args.no_autopsy)
 
         ctx = run_stage(stage05_tsk.run,           ctx, 'stage_05',   ui)
         ui.show_stage05_detail(ctx)  # Partitionen + Log-Dateien sofort sichtbar
@@ -150,11 +150,11 @@ def main():
         ctx = run_stage(stage09_antiforensics.run, ctx, 'stage_09',   ui)
         ui.show_stage09_detail(ctx)
 
-        ctx = run_stage(stage10_ml.run,            ctx, 'stage_10',   ui)
-        ctx = run_stage(stage11_mitre.run,         ctx, 'stage_11',   ui)
+        # ctx = run_stage(stage10_ml.run,            ctx, 'stage_10',   ui)
+        # ctx = run_stage(stage11_mitre.run,         ctx, 'stage_11',   ui)
 
-        ctx = run_stage(stage12_aggregation.run,   ctx, 'stage_12',   ui)
-        ui.show_stage12_detail(ctx)
+        # ctx = run_stage(stage12_aggregation.run,   ctx, 'stage_12',   ui)
+        # ui.show_stage12_detail(ctx)
 
         ctx = run_stage(stage13_quality.run,       ctx, 'stage_13',   ui)
         ui.show_stage13_detail(ctx)
