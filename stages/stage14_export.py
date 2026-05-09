@@ -35,6 +35,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
     _write_pipeline_report(ctx, case_dir)
     _write_autopsy_status(ctx, case_dir)
+    _write_iocs_json(ctx, case_dir)
+    _write_antiforensics_json(ctx, case_dir)
     _generate_report_pdf(ctx, case_dir)
     _generate_coc_pdf(ctx, case_dir)
     _upload_timesketch(ctx, case_dir)
@@ -103,6 +105,31 @@ def _write_autopsy_status(ctx: PipelineContext, case_dir: Path) -> None:
     }
     out = case_dir / 'autopsy_status.json'
     out.write_text(json.dumps(status, indent=2), encoding='utf-8')
+
+
+def _write_iocs_json(ctx: PipelineContext, case_dir: Path) -> None:
+    data = [
+        {
+            'type':       ioc.type,
+            'value':      ioc.value,
+            'source':     ioc.source,
+            'timestamp':  ioc.timestamp.isoformat() if ioc.timestamp else None,
+            'context':    ioc.context,
+        }
+        for ioc in ctx.iocs
+    ]
+    out = case_dir / 'iocs.json'
+    out.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+    log.info(f'  iocs.json → {out}')
+
+
+def _write_antiforensics_json(ctx: PipelineContext, case_dir: Path) -> None:
+    out = case_dir / 'antiforensics.json'
+    out.write_text(
+        json.dumps(ctx.antiforensics_hits, indent=2, ensure_ascii=False, default=str),
+        encoding='utf-8'
+    )
+    log.info(f'  antiforensics.json → {out}')
 
 
 # ── PDF Report ───────────────────────────────────────────────────────────────
@@ -253,25 +280,33 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
             story.append(_body(f'{i}. {r}'))
     story.append(PageBreak())
 
-    # ── Seite 3: MITRE ATT&CK Mapping ───────────────────────────────────────
-    story.append(_h1('MITRE ATT&CK Mapping'))
+    # ── Seite 3: Forensische Befunde (Stage 8.5) ────────────────────────────
+    story.append(_h1('Forensische Befunde'))
     story.append(_spacer(3))
-    story.append(_body('MITRE ATT&CK ist eine öffentliche Datenbank bekannter Angriffstechniken. '
-                       'Die Pipeline hat folgende Techniken automatisch identifiziert:'))
+    story.append(_body(
+        'Automatisch erkannte Anomalien basierend auf MACtime-Timestamps, '
+        'Anti-Forensics-Indikatoren und CVE-Zeitfenstern.'
+    ))
     story.append(_spacer(4))
-    if ctx.mitre_hits:
-        rows = [['T-Nummer', 'Technik', 'Taktik', 'Confidence', 'Quelle']]
-        for h in sorted(ctx.mitre_hits, key=lambda x: x['confidence'], reverse=True):
+
+    if ctx.forensic_findings:
+        sev_color = {'CRITICAL': C_RED_L, 'HIGH': C_ORANGE_L, 'MEDIUM': C_YELLOW_L}
+        rows = [['Schwere', 'Regel', 'Datei', 'Beschreibung']]
+        for f in ctx.forensic_findings[:30]:
             rows.append([
-                h['technique_id'],
-                h['technique_name'][:40],
-                ', '.join(h.get('tactics', []))[:30],
-                f'{h["confidence"]:.0%}',
-                h.get('event_source', '')[:20],
+                f.severity,
+                f.rule[:25],
+                f.file[:40],
+                f.description[:80],
             ])
-        story.append(_table(rows, [22*mm, 55*mm, 40*mm, 22*mm, 31*mm]))
+        t = _table(rows, [20*mm, 35*mm, 45*mm, 70*mm])
+        story.append(t)
+        story.append(_spacer(4))
+        story.append(_body(
+            f'Vollständige Befunde mit Evidence-Kontext: forensic_findings.json'
+        ))
     else:
-        story.append(_body('Keine MITRE-Techniken erkannt.'))
+        story.append(_body('Keine forensischen Befunde erkannt.'))
     story.append(PageBreak())
 
     # ── Seite 4: IOC-Liste ───────────────────────────────────────────────────

@@ -6,6 +6,7 @@ from datetime import datetime
 from .event import ForensicEvent
 from .ioc import IOC
 from .chain_of_custody import ChainOfCustody
+from .forensic_finding import ForensicFinding
 
 
 @dataclass
@@ -90,6 +91,9 @@ class PipelineContext:
 
     # ── Stage 9: Anti-Forensics ───────────────────────────
     antiforensics_hits: List[Dict] = field(default_factory=list)
+
+    # ── Stage 8.5: Forensischer Analyse-Algorithmus ───────
+    forensic_findings:  List[ForensicFinding] = field(default_factory=list)
 
     # ── Stage 10: ML ──────────────────────────────────────
     anomalies:          List[ForensicEvent] = field(default_factory=list)
