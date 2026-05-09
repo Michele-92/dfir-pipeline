@@ -12,21 +12,17 @@ from rich.text import Text
 console = Console()
 
 STAGE_INFO = {
-    'stage_01':   ('01',   'Dateierkennung & Beweissicherung'),
-    'stage_02':   ('02',   'RAM-Analyse (Volatility3)'),
-    'stage_03':   ('03',   'System-Profiling'),
-    'stage_04':   ('04',   'Disk-Extraktion (Dissect)'),
-    'stage_04_1': ('04.1', 'Autopsy-Integration'),
-    'stage_05':   ('05',   'TSK Fallback'),
-    'stage_06':   ('06',   'Log-Parsing (38 Parser)'),
-    'stage_07':   ('07',   'IOC-Extraktion'),
-    'stage_08':   ('08',   'Datennormalisierung'),
-    'stage_09':   ('09',   'Anti-Forensics-Erkennung'),
-    'stage_10':   ('10',   'ML-Anomalieerkennung'),
-    'stage_11':   ('11',   'MITRE ATT&CK Mapping'),
-    'stage_12':   ('12',   'Ergebnis-Aggregation'),
-    'stage_13':   ('13',   'Qualitätsprüfung'),
-    'stage_14':   ('14',   'Export & Archivierung'),
+    'stage_01':   ('01',    'Dateierkennung & Beweissicherung'),
+    'stage_02':   ('02',    'RAM-Analyse (Volatility3)'),
+    'stage_03':   ('03',    'System-Profiling'),
+    'stage_05':   ('05',    'TSK Fallback'),
+    'stage_06':   ('06',    'Log-Parsing (38 Parser)'),
+    'stage_07':   ('07',    'IOC-Extraktion'),
+    'stage_08':   ('08',    'Datennormalisierung'),
+    'stage_09':   ('09',    'Anti-Forensics-Erkennung'),
+    'stage_8.5':  ('8.5',   'Forensischer Analyse-Algorithmus'),
+    'stage_13':   ('13',    'Qualitätsprüfung'),
+    'stage_14':   ('14',    'Export & Archivierung'),
 }
 
 SPINNERS = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
