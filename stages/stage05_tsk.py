@@ -408,7 +408,20 @@ def _run_sorter(image_path: Path, offset: int,
                         pass
         ctx.tsk_sorter_ran        = True
         ctx.tsk_sorter_categories = categories
-        log.info(f'  Sorter: {len(categories)} Kategorien erkannt')
+
+        # Sorter-Output-Verzeichnis scannen → Datei-zu-Kategorie Mapping aufbauen
+        # Der Sorter erstellt Unterordner pro Kategorie (exec/, images/, archive/...)
+        # und legt die erkannten Dateien dort ab.
+        sorter_files: Dict[str, str] = {}
+        for category_dir in out_dir.iterdir():
+            if not category_dir.is_dir():
+                continue
+            category = category_dir.name  # z.B. "exec", "images", "archive"
+            for f in category_dir.rglob('*'):
+                if f.is_file():
+                    sorter_files[f.name] = category
+        ctx.tsk_sorter_files = sorter_files
+        log.info(f'  Sorter: {len(categories)} Kategorien, {len(sorter_files)} Dateien klassifiziert')
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         log.warning(f'  Sorter fehlgeschlagen: {e}')
 

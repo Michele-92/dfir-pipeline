@@ -16,6 +16,19 @@ log = logging.getLogger(__name__)
 SYSTEM_PATHS = ['/etc/', '/bin/', '/sbin/', '/usr/bin/', '/usr/sbin/', '/lib/', '/usr/lib/']
 STAGING_PATHS = ['/tmp/', '/dev/shm/', '/var/tmp/']
 
+# Dateiendung → erwartete Sorter-Kategorie
+# Wenn Sorter etwas anderes erkennt → Mismatch → verdächtig
+EXT_EXPECTED = {
+    '.jpg': 'images',  '.jpeg': 'images', '.png': 'images',
+    '.gif': 'images',  '.bmp': 'images',
+    '.pdf': 'documents',
+    '.txt': 'text',    '.log':  'text',   '.conf': 'text',  '.csv': 'text',
+    '.zip': 'archive', '.tar':  'archive', '.gz': 'archive', '.bz2': 'archive',
+    '.mp3': 'audio',   '.wav':  'audio',
+    '.mp4': 'video',   '.avi':  'video',
+    '.sh':  'exec',    '.py':   'exec',
+}
+
 # Regex zum Extrahieren der MACB-Flags aus der message: "[m..b] /pfad (123 bytes)"
 _MACB_RE = re.compile(r'^\[([macb.]+)\]')
 
@@ -43,6 +56,9 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
     # Schritt 3: Stage 9 Kreuzreferenz — Schwere hochstufen wenn bestätigt
     findings = _cross_reference_stage9(findings, ctx.antiforensics_hits)
+
+    # Gruppe 6: Sorter-Mismatch (Dateiendung ≠ erkannter Typ)
+    findings += _check_sorter_mismatches(ctx.tsk_sorter_files, mactime_index)
 
     # Schritt 4: CVE-Zeitfenster aus Stage 7
     findings += _check_cve_windows(ctx.iocs, ctx.events_db_path)
@@ -334,6 +350,63 @@ def _get_stage6_context(
     except Exception as e:
         log.warning(f'  Stage-6-Kontext Fehler: {e}')
     return context
+
+
+# ── Gruppe 6: Sorter-Mismatch ────────────────────────────────────────────────
+
+def _check_sorter_mismatches(
+    sorter_files: Dict[str, str],
+    mactime_index: Dict
+) -> List[ForensicFinding]:
+    """Erkennt Dateien deren Typ nicht zur Dateiendung passt."""
+    findings = []
+    if not sorter_files:
+        return findings
+
+    # MACtime-Anomalie-Dateien für Kreuzprüfung sammeln
+    mactime_anomaly_files = {
+        Path(fpath).name for fpath, ts in mactime_index.items()
+        if ts.get('M') and ts.get('B') and ts['M'] < ts['B']
+    }
+
+    for filename, detected_category in sorter_files.items():
+        ext = Path(filename).suffix.lower()
+        expected = EXT_EXPECTED.get(ext)
+
+        # Regel 1: Dateiendung passt nicht zur erkannten Kategorie
+        if expected and expected != detected_category:
+            severity = 'CRITICAL' if detected_category == 'exec' else 'HIGH'
+            description = (
+                f'Dateiendung {ext} (erwartet: {expected}) '
+                f'aber Sorter erkannte: {detected_category} — mögliche Tarnung'
+            )
+            # Doppelte Verschleierung: Mismatch + MACtime-Anomalie auf gleicher Datei
+            if filename in mactime_anomaly_files:
+                severity = 'CRITICAL'
+                description += ' + MACtime-Timestamp-Anomalie — doppelte Verschleierung!'
+
+            findings.append(ForensicFinding(
+                severity=severity,
+                rule='sorter_extension_mismatch',
+                file=filename,
+                description=description,
+                anomaly_time=None,
+            ))
+
+        # Regel 2: Executable in Staging-Area
+        if detected_category == 'exec':
+            for staging in STAGING_PATHS:
+                if staging.strip('/') in filename.lower():
+                    findings.append(ForensicFinding(
+                        severity='CRITICAL',
+                        rule='sorter_exec_in_staging',
+                        file=filename,
+                        description=f'Executable in Staging-Bereich: {filename}',
+                        anomaly_time=None,
+                    ))
+                    break
+
+    return findings
 
 
 # ── JSON Export ───────────────────────────────────────────────────────────────

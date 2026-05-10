@@ -66,6 +66,7 @@ class PipelineContext:
     tsk_mactime_file:          str            = ''
     tsk_sorter_ran:            bool           = False
     tsk_sorter_categories:     Dict[str, int] = field(default_factory=dict)
+    tsk_sorter_files:          Dict[str, str] = field(default_factory=dict)  # {dateiname: kategorie}
 
     # ── Stage 6: Log-Parsing ─────────────────────────────
     events:             List[ForensicEvent] = field(default_factory=list)
