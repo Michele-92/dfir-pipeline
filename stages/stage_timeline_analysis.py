@@ -67,6 +67,12 @@ def run(ctx: PipelineContext) -> PipelineContext:
     for f in findings:
         if f.anomaly_time:
             f.evidence = _get_stage6_context(ctx.events_db_path, f.anomaly_time)
+            # DIAGNOSE: zeigt wie viele Kontext-Zeilen pro Finding gefunden wurden
+            log.warning(
+                f'  [DIAGNOSE] {f.severity} {f.rule} | '
+                f'anomaly_time={f.anomaly_time} (tzinfo={f.anomaly_time.tzinfo}) | '
+                f'evidence={len(f.evidence)} Zeilen'
+            )
 
     # Nach Schwere sortieren
     order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2}
