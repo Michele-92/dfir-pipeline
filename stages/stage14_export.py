@@ -7,6 +7,13 @@ from pathlib import Path
 from models.pipeline_context import PipelineContext
 from stages.stage13_quality import evaluate_quality
 
+try:
+    from ki_text_generator import generate_all_critical_texts
+    from report_builder import build_critical_report
+    _KI_AVAILABLE = True
+except ImportError:
+    _KI_AVAILABLE = False
+
 log = logging.getLogger(__name__)
 
 # ── Farben (HEX → RGB tuple) ─────────────────────────────────────────────────
@@ -39,12 +46,39 @@ def run(ctx: PipelineContext) -> PipelineContext:
     _write_antiforensics_json(ctx, case_dir)
     _generate_report_pdf(ctx, case_dir)
     _generate_coc_pdf(ctx, case_dir)
+    _generate_critical_report(ctx, case_dir)
     _upload_timesketch(ctx, case_dir)
 
     log.info(f'  Export abgeschlossen → {case_dir}')
     if ctx.coc:
         ctx.coc.add_entry('stage_14', 'Export abgeschlossen')
     return ctx
+
+
+def _generate_critical_report(ctx: PipelineContext, case_dir: Path) -> None:
+    if not _KI_AVAILABLE:
+        log.warning('  DFIR Critical Report übersprungen — ki_text_generator/report_builder nicht verfügbar')
+        return
+    critical = [f for f in ctx.forensic_findings if f.severity == 'CRITICAL']
+    if not critical:
+        log.info('  DFIR Critical Report übersprungen — keine CRITICAL-Befunde')
+        return
+    try:
+        log.info(f'  Generiere KI-Texte für {len(critical)} CRITICAL-Befunde...')
+        ki_texte_map = generate_all_critical_texts(
+            findings       = ctx.forensic_findings,
+            delay_seconds  = 0.3,
+        )
+        out = case_dir / 'DFIR_Critical_Report.pdf'
+        build_critical_report(
+            findings     = ctx.forensic_findings,
+            ki_texte_map = ki_texte_map,
+            ctx          = ctx,
+            output_path  = out,
+        )
+        log.info(f'  DFIR_Critical_Report.pdf → {out}')
+    except Exception as e:
+        log.warning(f'  DFIR Critical Report Fehler: {e}')
 
 
 # ── pipeline_report.json ─────────────────────────────────────────────────────
