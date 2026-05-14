@@ -159,7 +159,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
         log.info('Stage 4.3: Hayabusa — keine EVTX-Dateien, übersprungen')
 
     if ctx.coc:
-        ctx.coc.add_entry('stage_04', f'Log-Parsing: {ctx.parsed_events} Events')
+        ctx.coc.add_entry('stage_06', f'Log-Parsing: {ctx.parsed_events} Events')
     return ctx
 
 

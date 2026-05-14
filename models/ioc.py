@@ -5,9 +5,8 @@ from typing import Optional
 
 @dataclass
 class IOC:
-    type:       str
-    value:      str
-    source:     str
-    confidence: float
-    context:    str
-    timestamp:  Optional[datetime] = None
+    type:      str
+    value:     str
+    source:    str
+    context:   str
+    timestamp: Optional[datetime] = None

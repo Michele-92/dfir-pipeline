@@ -1,4 +1,3 @@
-import hashlib
 import subprocess
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -7,6 +6,7 @@ from typing import Dict, List, Tuple
 
 from tqdm import tqdm
 from models.pipeline_context import PipelineContext
+from utils.hashing import compute_both
 
 log = logging.getLogger(__name__)
 
@@ -125,7 +125,7 @@ def _hash_extracted_files(directory: Path, ctx) -> None:
         if not f.is_file():
             continue
         try:
-            sha256 = hashlib.sha256(f.read_bytes()).hexdigest()
+            sha256, _ = compute_both(f)
             ctx.coc.add_file_hash(f.name, sha256)
         except Exception:
             pass

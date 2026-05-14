@@ -57,7 +57,6 @@ def _create_case_dir(output_dir: Path) -> Path:
     tag   = f'{now.day:02d}_{TAGE[now.weekday()]}'
     case  = f'case_{now.strftime("%Y%m%d_%H%M%S")}'
     case_dir = output_dir / str(now.year) / monat / tag / case
-    for sub in ['raw/disk_artefakte', 'raw/memory_artefakte',
-                'raw/log_artefakte', 'raw/autopsy_artefakte']:
+    for sub in ['raw/disk_artefakte', 'raw/log_artefakte']:
         (case_dir / sub).mkdir(parents=True, exist_ok=True)
     return case_dir

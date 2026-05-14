@@ -25,15 +25,15 @@ PRIVATE_IPS = re.compile(
 )
 
 EXTRACTORS = [
-    ('ip',         IPV4_RE,   0.9),
-    ('ipv6',       IPV6_RE,   0.9),
-    ('domain',     DOMAIN_RE, 0.7),
-    ('url',        URL_RE,    0.85),
-    ('hash_md5',   MD5_RE,    0.8),
-    ('hash_sha256',SHA256_RE, 0.85),
-    ('email',      EMAIL_RE,  0.9),
-    ('cve',        CVE_RE,    0.95),
-    ('registry_key', REG_RE,  0.9),
+    ('ip',           IPV4_RE),
+    ('ipv6',         IPV6_RE),
+    ('domain',       DOMAIN_RE),
+    ('url',          URL_RE),
+    ('hash_md5',     MD5_RE),
+    ('hash_sha256',  SHA256_RE),
+    ('email',        EMAIL_RE),
+    ('cve',          CVE_RE),
+    ('registry_key', REG_RE),
 ]
 
 
@@ -56,24 +56,21 @@ def run(ctx: PipelineContext) -> PipelineContext:
     # ── Regex-Extraktion (ergänzend aus Events) ────────────────────────────
     sources = _collect_texts(ctx)
     for text, source in sources:
-        for ioc_type, pattern, confidence in EXTRACTORS:
+        for ioc_type, pattern in EXTRACTORS:
             for match in pattern.finditer(text):
                 value = match.group(0).strip()
                 if not value:
                     continue
-                if ioc_type == 'ip' and PRIVATE_IPS.match(value):
-                    confidence = 0.4
                 key = (ioc_type, value)
                 if key in seen:
                     continue
                 seen.add(key)
                 iocs.append(IOC(
-                    type       = ioc_type,
-                    value      = value,
-                    source     = source,
-                    confidence = confidence,
-                    context    = text[max(0, match.start()-40):match.end()+40].strip(),
-                    timestamp  = datetime.now(tz=timezone.utc),
+                    type      = ioc_type,
+                    value     = value,
+                    source    = source,
+                    context   = text[max(0, match.start()-40):match.end()+40].strip(),
+                    timestamp = datetime.now(tz=timezone.utc),
                 ))
 
     ctx.iocs = iocs
@@ -109,16 +106,16 @@ def _run_bulk_extractor(image_path: Path, out_dir: Path,
 
     # Mapping: bulk_extractor Dateiname → IOC-Typ + Confidence
     file_map = {
-        'ip.txt':       ('ip',          0.85),
-        'ip6.txt':      ('ipv6',        0.85),
-        'email.txt':    ('email',       0.9),
-        'url.txt':      ('url',         0.85),
-        'domain.txt':   ('domain',      0.75),
-        'md5.txt':      ('hash_md5',    0.8),
-        'sha1.txt':     ('hash_sha256', 0.8),
+        'ip.txt':     'ip',
+        'ip6.txt':    'ipv6',
+        'email.txt':  'email',
+        'url.txt':    'url',
+        'domain.txt': 'domain',
+        'md5.txt':    'hash_md5',
+        'sha1.txt':   'hash_sha1',
     }
 
-    for fname, (ioc_type, confidence) in file_map.items():
+    for fname, ioc_type in file_map.items():
         f = out_dir / fname
         if not f.exists():
             continue
@@ -132,16 +129,13 @@ def _run_bulk_extractor(image_path: Path, out_dir: Path,
             context = parts[2].strip() if len(parts) > 2 else ''
             if not value or (ioc_type, value) in seen:
                 continue
-            if ioc_type == 'ip' and PRIVATE_IPS.match(value):
-                confidence = 0.4
             seen.add((ioc_type, value))
             iocs.append(IOC(
-                type       = ioc_type,
-                value      = value,
-                source     = 'bulk_extractor',
-                confidence = confidence,
-                context    = context[:100],
-                timestamp  = datetime.now(tz=timezone.utc),
+                type      = ioc_type,
+                value     = value,
+                source    = 'bulk_extractor',
+                context   = context[:100],
+                timestamp = datetime.now(tz=timezone.utc),
             ))
 
     ctx.bulk_extractor_iocs = len(iocs)

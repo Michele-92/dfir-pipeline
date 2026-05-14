@@ -116,8 +116,7 @@ def _write_pipeline_report(ctx: PipelineContext, case_dir: Path) -> None:
             'antiforensics_hits': len(ctx.antiforensics_hits),
         },
         'iocs': [
-            {'type': ioc.type, 'value': ioc.value,
-             'confidence': ioc.confidence, 'source': ioc.source}
+            {'type': ioc.type, 'value': ioc.value, 'source': ioc.source}
             for ioc in ctx.iocs[:100]
         ],
         'mitre_hits': ctx.mitre_hits,
@@ -361,10 +360,10 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
             continue
         story.append(_h2(group_name))
         story.append(_spacer(2))
-        rows = [['Typ', 'Wert', 'Confidence', 'Quelle']]
+        rows = [['Typ', 'Wert', 'Quelle']]
         for ioc in group[:30]:
-            rows.append([ioc.type, ioc.value[:60], f'{ioc.confidence:.0%}', ioc.source[:20]])
-        story.append(_table(rows, [25*mm, 95*mm, 22*mm, 28*mm]))
+            rows.append([ioc.type, ioc.value[:60], ioc.source[:20]])
+        story.append(_table(rows, [25*mm, 117*mm, 28*mm]))
         story.append(_spacer(4))
     story.append(PageBreak())
 
@@ -594,16 +593,15 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     story.append(_h2('Erweiterte IOC-Tabelle'))
     story.append(_spacer(2))
     if ctx.iocs:
-        rows = [['Typ', 'Wert', 'Conf.', 'Parser', 'Kontext']]
+        rows = [['Typ', 'Wert', 'Parser', 'Kontext']]
         for ioc in ctx.iocs[:30]:
             rows.append([
                 ioc.type,
                 ioc.value[:40],
-                f'{ioc.confidence:.0%}',
                 ioc.source[:20],
                 ioc.context[:40],
             ])
-        story.append(_table(rows, [22*mm, 50*mm, 14*mm, 25*mm, 59*mm]))
+        story.append(_table(rows, [22*mm, 64*mm, 25*mm, 59*mm]))
     else:
         story.append(_body('Keine IOCs extrahiert.'))
 

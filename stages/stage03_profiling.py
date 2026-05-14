@@ -8,7 +8,7 @@ log = logging.getLogger(__name__)
 
 OS_PROFILES = {
     'debian': {
-        'keywords': ['debian', 'ubuntu', 'kali', 'mint', 'linux'],
+        'keywords': ['debian', 'ubuntu', 'kali', 'mint'],
         'log_paths': {
             'syslog':  Path('/var/log/syslog'),
             'auth':    Path('/var/log/auth.log'),
@@ -87,8 +87,11 @@ def _read_os_release(image_path) -> str:
             ['target-query', '-f', 'os', str(image_path)],
             capture_output=True, text=True, timeout=30
         )
+        if result.returncode != 0:
+            log.debug(f'target-query os stderr: {result.stderr.strip()}')
         return _parse_target_line(result.stdout) or result.stdout.strip()
-    except Exception:
+    except Exception as e:
+        log.debug(f'target-query os fehlgeschlagen: {e}')
         return ''
 
 
@@ -107,9 +110,12 @@ def _read_kernel(image_path) -> str:
             ['target-query', '-f', 'version', str(image_path)],
             capture_output=True, text=True, timeout=30
         )
+        if result.returncode != 0:
+            log.debug(f'target-query version stderr: {result.stderr.strip()}')
         val = _parse_target_line(result.stdout)
         return val if val else ''
-    except Exception:
+    except Exception as e:
+        log.debug(f'target-query version fehlgeschlagen: {e}')
         return ''
 
 
@@ -119,9 +125,12 @@ def _read_hostname(image_path) -> str:
             ['target-query', '-f', 'hostname', str(image_path)],
             capture_output=True, text=True, timeout=30
         )
+        if result.returncode != 0:
+            log.debug(f'target-query hostname stderr: {result.stderr.strip()}')
         val = _parse_target_line(result.stdout)
         return val if val else result.stdout.strip() or 'unknown'
-    except Exception:
+    except Exception as e:
+        log.debug(f'target-query hostname fehlgeschlagen: {e}')
         return 'unknown'
 
 
@@ -131,10 +140,13 @@ def _read_timezone(image_path) -> str:
             ['target-query', '-f', 'timezone', str(image_path)],
             capture_output=True, text=True, timeout=30
         )
+        if result.returncode != 0:
+            log.debug(f'target-query timezone stderr: {result.stderr.strip()}')
         val = _parse_target_line(result.stdout)
         tz = val if val else result.stdout.strip()
         return tz if tz else 'UTC'
-    except Exception:
+    except Exception as e:
+        log.debug(f'target-query timezone fehlgeschlagen: {e}')
         return 'UTC'
 
 

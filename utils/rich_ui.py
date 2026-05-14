@@ -1,6 +1,11 @@
+import re
 import time
 import threading
 from typing import Dict, Optional
+
+PRIVATE_IPS = re.compile(
+    r'^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|0\.0\.0\.0|255\.255\.255\.255)'
+)
 
 from rich import box
 from rich.console import Console
@@ -131,6 +136,39 @@ class PipelineUI:
             padding=(0, 1),
         ))
 
+        # ── Stage-Übersicht ───────────────────────────────────────────────────
+        st = Table(box=box.SIMPLE, show_header=True, expand=True)
+        st.add_column('Stage',        style='bold',  width=10)
+        st.add_column('Beschreibung', min_width=32)
+        st.add_column('Status',       width=14)
+        st.add_column('Dauer',        width=7,  justify='right')
+        st.add_column('Info',         style='dim')
+
+        for key, (num, desc) in STAGE_INFO.items():
+            state = self.states.get(key)
+            if not state or state.status == 'waiting':
+                continue
+            if state.status == 'ok':
+                icon, s_text = '✅', Text('OK',            style='green')
+            elif state.status == 'skipped':
+                icon, s_text = '⏭', Text('ÜBERSPRUNGEN',  style='dim')
+            elif state.status == 'error':
+                icon, s_text = '❌', Text('FEHLER',        style='bold red')
+            else:
+                icon, s_text = '⏳', Text(state.status,   style='yellow')
+
+            dur  = _fmt_time(state.duration) if state.duration else '—'
+            err  = ctx.stage_errors.get(key, '')
+            info = err[:60] if err else state.note[:60]
+            st.add_row(f'{icon}  {num}', desc, s_text, dur, info)
+
+        console.print(Panel(
+            st,
+            title='[bold blue]Stage-Übersicht[/bold blue]',
+            border_style='bright_blue',
+            padding=(0, 1),
+        ))
+
     def show_stage01_detail(self, ctx) -> None:
         t = Table(box=box.ROUNDED, show_header=False, border_style='cyan', expand=True)
         t.add_column('Feld', style='bold', min_width=22)
@@ -248,7 +286,7 @@ class PipelineUI:
         type_counts = Counter(ioc.type for ioc in ctx.iocs)
         ip_total    = type_counts.get('ip', 0)
         ip_private  = sum(1 for ioc in ctx.iocs
-                          if ioc.type == 'ip' and ioc.confidence < 0.5)
+                          if ioc.type == 'ip' and PRIVATE_IPS.match(ioc.value))
         ip_public   = ip_total - ip_private
         cves        = [ioc.value for ioc in ctx.iocs if ioc.type == 'cve'][:5]
 
