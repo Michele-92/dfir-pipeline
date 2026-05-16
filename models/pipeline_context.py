@@ -113,3 +113,32 @@ class PipelineContext:
     # ── Chain of Custody ──────────────────────────────────
     coc:                Optional[ChainOfCustody] = None
     start_time:         datetime = field(default_factory=datetime.now)
+
+    # ── Stage 01 erweitert ────────────────────────────────
+    hash_source:        str = 'Berechnet'
+
+    # ── Stage 02: Partition-Layout ────────────────────────
+    partition_layout:    List[dict] = field(default_factory=list)
+    multi_os_detected:   bool       = False
+    primary_partition:   dict       = field(default_factory=dict)
+    analysis_partitions: List[dict] = field(default_factory=list)
+    interactive_mode:    bool       = False
+
+    # ── Stage 03 erweitert ────────────────────────────────
+    timezone_display:   str        = ''
+    machine_id:         str        = ''
+    ip_addresses:       List[str]  = field(default_factory=list)
+    network_config:     str        = ''
+    users:              List[dict] = field(default_factory=list)
+    shadow_mtime:       str        = ''
+    notable_users:      List[str]  = field(default_factory=list)
+
+    # ── Stage 03.5: Basic Checks ──────────────────────────
+    basic_checks:          List[dict] = field(default_factory=list)
+    basic_check_anomalies: int        = 0
+
+    # ── Stage 05 erweitert ────────────────────────────────
+    tool_selection:     Dict[str, str] = field(default_factory=dict)
+
+    # ── Pipeline-Modi ─────────────────────────────────────
+    yara_mode:          str = 'custom'

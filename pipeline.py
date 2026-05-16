@@ -15,7 +15,9 @@ from utils.rich_ui import PipelineUI
 from stages import (
     stage01_detection,
     stage02_memory,
+    stage02_partition_layout,
     stage03_profiling,
+    stage035_basic_checks,
     stage04_disk,
     stage04_1_autopsy,
     stage05_tsk,
@@ -53,16 +55,17 @@ def run_stage(stage_fn, ctx: PipelineContext, stage_name: str,
         else:
             # Kurze Zusatzinfo pro Stage
             notes = {
-                'stage_01': f'{ctx.file_type}  {ctx.file_size_gb:.1f} GB',
-                'stage_02': f'{sum(len(v) for v in ctx.memory_results.values()):,} Einträge',
-                'stage_03': ctx.os_name or '',
-                'stage_04': f'{sum(len(v) for v in ctx.disk_artifacts.values()):,} Artefakte',
-                'stage_06': f'{ctx.parsed_events:,} Events',
-                'stage_07': f'{len(ctx.iocs)} IOCs',
-                'stage_08': f'{len(ctx.normalized_events):,} Events normalisiert',
-                'stage_09': f'{len(ctx.antiforensics_hits)} Treffer',
-                'stage_10': f'{len(ctx.anomalies)} Anomalien',
-                'stage_11': f'{len(ctx.mitre_hits)} Techniken',
+                'stage_01':   f'{ctx.file_type}  {ctx.file_size_gb:.1f} GB  [{ctx.hash_source}]',
+                'stage_02':   f'{len(ctx.partition_layout)} Partitionen  {len(ctx.analysis_partitions)} analysierbar',
+                'stage_03':   ctx.os_name or '',
+                'stage_03_5': f'{ctx.basic_check_anomalies} Anomalien',
+                'stage_04':   f'{sum(len(v) for v in ctx.disk_artifacts.values()):,} Artefakte',
+                'stage_06':   f'{ctx.parsed_events:,} Events',
+                'stage_07':   f'{len(ctx.iocs)} IOCs',
+                'stage_08':   f'{len(ctx.normalized_events):,} Events normalisiert',
+                'stage_09':   f'{len(ctx.antiforensics_hits)} Treffer',
+                'stage_10':   f'{len(ctx.anomalies)} Anomalien',
+                'stage_11':   f'{len(ctx.mitre_hits)} Techniken',
             }
             ui.stage_done(stage_name, status='ok', note=notes.get(stage_name, 'OK'))
         return result
@@ -94,6 +97,10 @@ def main():
     parser.add_argument('--debug',             action='store_true', help='Debug-Logging aktivieren')
     parser.add_argument('--workers',           type=int, default=2,
                         help='Anzahl paralleler Worker für Stage 6 + Stage 5 (Standard: 2)')
+    parser.add_argument('--mode', choices=['auto', 'manual'], default='auto',
+                        help='auto=vollautomatisch | manual=Kontrollmodus mit Tool-Auswahl pro Partition')
+    parser.add_argument('--yara', choices=['custom', 'linux', 'full'], default='custom',
+                        help='custom=nur eigene Regeln (schnell) | linux=Linux-relevante Regeln | full=alle 1264 Regeln')
     args = parser.parse_args()
 
     if args.debug:
@@ -112,6 +119,8 @@ def main():
         workers         = args.workers,
         skip_bulk_extractor = args.no_bulk_extractor,
         skip_mactime        = args.no_mactime,
+        interactive_mode    = (args.mode == 'manual'),
+        yara_mode           = args.yara,
     )
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -120,14 +129,17 @@ def main():
 
     try:
         # ── Pipeline ausführen — Panel direkt nach jeder Stage ────────────────
-        ctx = run_stage(stage01_detection.run,     ctx, 'stage_01',   ui)
+        ctx = run_stage(stage01_detection.run,          ctx, 'stage_01',   ui)
         ui.show_stage01_detail(ctx)
 
-        # ctx = run_stage(stage02_memory.run,        ctx, 'stage_02',   ui)
-        # ui.show_stage02_detail(ctx)
+        ctx = run_stage(stage02_partition_layout.run,   ctx, 'stage_02',   ui)
+        ui.show_stage02_partition_detail(ctx)
 
-        ctx = run_stage(stage03_profiling.run,     ctx, 'stage_03',   ui)
+        ctx = run_stage(stage03_profiling.run,          ctx, 'stage_03',   ui)
         ui.show_stage03_detail(ctx)
+
+        ctx = run_stage(stage035_basic_checks.run,      ctx, 'stage_03_5', ui)
+        ui.show_stage035_detail(ctx)
 
         # ctx = run_stage(stage04_disk.run,          ctx, 'stage_04',   ui)
         # ctx = run_stage(stage04_1_autopsy.run,     ctx, 'stage_04_1', ui,

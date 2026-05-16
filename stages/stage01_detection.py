@@ -6,6 +6,7 @@ from models.pipeline_context import PipelineContext
 from models.chain_of_custody import ChainOfCustody
 from utils.hashing import compute_both
 from utils.file_detection import detect_format, detect_format_by_extension
+from utils.e01_reader import read_e01_hashes
 
 log = logging.getLogger(__name__)
 
@@ -30,10 +31,23 @@ def run(ctx: PipelineContext) -> PipelineContext:
     ctx.file_size_gb = path.stat().st_size / (1024 ** 3)
     log.info(f'Format: {ctx.file_type}, Größe: {ctx.file_size_gb:.2f} GB')
 
-    # Hashes berechnen
-    log.info('Berechne SHA256 + MD5...')
-    ctx.sha256, ctx.md5 = compute_both(path)
-    log.info(f'SHA256: {ctx.sha256[:16]}...')
+    # Hashes — bei E01 eingebettete Hashes auslesen, sonst berechnen
+    if ctx.file_type in ('E01', 'EWF'):
+        md5, sha1 = read_e01_hashes(path)
+        if md5:
+            ctx.md5        = md5
+            ctx.sha256     = sha1
+            ctx.hash_source = 'E01-eingebettet'
+            log.info(f'E01-Hash gelesen: MD5={md5[:16]}...')
+        else:
+            log.info('E01-Hash nicht lesbar — berechne neu...')
+            ctx.sha256, ctx.md5 = compute_both(path)
+            ctx.hash_source = 'Berechnet'
+    else:
+        log.info('Berechne SHA256 + MD5...')
+        ctx.sha256, ctx.md5 = compute_both(path)
+        ctx.hash_source = 'Berechnet'
+    log.info(f'Hash-Quelle: {ctx.hash_source}')
 
     # Ausgabe-Ordnerstruktur
     ctx.case_dir = _create_case_dir(ctx.output_dir)

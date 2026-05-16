@@ -1,3 +1,4 @@
+import csv
 import json
 import logging
 import time
@@ -44,6 +45,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
     _write_autopsy_status(ctx, case_dir)
     _write_iocs_json(ctx, case_dir)
     _write_antiforensics_json(ctx, case_dir)
+    _write_activity_csv(ctx, case_dir)
+    _export_mactime_package(ctx, case_dir)
     _generate_report_pdf(ctx, case_dir)
     _generate_coc_pdf(ctx, case_dir)
     _generate_critical_report(ctx, case_dir)
@@ -163,6 +166,76 @@ def _write_antiforensics_json(ctx: PipelineContext, case_dir: Path) -> None:
         encoding='utf-8'
     )
     log.info(f'  antiforensics.json → {out}')
+
+
+# ── Activity CSV (Logins, Reboots, Crashes) ──────────────────────────────────
+
+ACTIVITY_KEYWORDS = {
+    'REBOOT': ['reboot', 'shutdown', 'started up', 'system boot', 'kernel command line',
+               'systemd: starting', 'reached target basic system'],
+    'LOGIN':  ['session opened', 'accepted password', 'accepted publickey',
+               'new session', 'logged in', 'pam_unix.*session'],
+    'CRASH':  ['kernel panic', 'oom killer', 'segfault', 'out of memory',
+               'killed process', 'call trace'],
+}
+
+
+def _write_activity_csv(ctx: PipelineContext, case_dir: Path) -> None:
+    """Exportiert Logins, Reboots und Crashes als CSV-Timeline."""
+    if not ctx.events_db_path or not ctx.events_db_path.exists():
+        log.warning('  activity_timeline.csv: keine events.db vorhanden')
+        return
+    from utils.event_store import EventStore
+    relevant = []
+    with EventStore(ctx.events_db_path) as store:
+        for event in store.iter_events():
+            msg_lower = event.message.lower()
+            for event_type, keywords in ACTIVITY_KEYWORDS.items():
+                if any(kw in msg_lower for kw in keywords):
+                    relevant.append((event, event_type))
+                    break
+
+    out = case_dir / 'activity_timeline.csv'
+    with open(out, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Timestamp_UTC', 'Event_Type', 'User', 'IP', 'Source', 'Details'])
+        for event, event_type in sorted(relevant, key=lambda x: x[0].timestamp):
+            writer.writerow([
+                event.timestamp.isoformat(),
+                event_type,
+                event.user  or '',
+                event.ip    or '',
+                event.source,
+                event.message[:300],
+            ])
+    log.info(f'  activity_timeline.csv → {out}  ({len(relevant)} Einträge)')
+
+
+# ── MACtime CSV-Paket ────────────────────────────────────────────────────────
+
+def _export_mactime_package(ctx: PipelineContext, case_dir: Path) -> None:
+    """Exportiert MACtime-Events aus DuckDB als standalone CSV-Paket."""
+    if not ctx.events_db_path or not ctx.events_db_path.exists():
+        return
+    from utils.event_store import EventStore
+    out = case_dir / 'filesystem_timeline.csv'
+    count = 0
+    with EventStore(ctx.events_db_path) as store:
+        with open(out, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Timestamp_UTC', 'MACB_Type', 'File_Path', 'Severity', 'Message'])
+            for event in store.iter_events():
+                if event.source != 'mactime':
+                    continue
+                writer.writerow([
+                    event.timestamp.isoformat(),
+                    event.event_type,
+                    event.file_path or '',
+                    event.severity,
+                    event.message[:300],
+                ])
+                count += 1
+    log.info(f'  filesystem_timeline.csv → {out}  ({count:,} MACtime-Events)')
 
 
 # ── PDF Report ───────────────────────────────────────────────────────────────

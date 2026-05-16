@@ -27,25 +27,57 @@ LOG_KEYWORDS = [
 ]
 
 
+def _analyse_xfs_native(image_path: Path, offset: int) -> List[str]:
+    """XFS-Analyse via xfs_db wenn installiert, sonst TSK-Fallback."""
+    import shutil
+    if not shutil.which('xfs_db'):
+        log.warning('  xfs_db nicht gefunden — TSK Fallback für XFS')
+        return _analyse_xfs(image_path, offset)
+    try:
+        result = subprocess.run(
+            ['xfs_db', '-r', '-c', 'ls', str(image_path)],
+            capture_output=True, text=True, timeout=300, errors='replace'
+        )
+        entries = [l for l in result.stdout.splitlines() if l.strip()]
+        log.info(f'  XFS via xfs_db: {len(entries)} Einträge')
+        if not entries:
+            log.warning('  xfs_db lieferte keine Einträge — TSK Fallback')
+            return _analyse_xfs(image_path, offset)
+        return entries
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        log.warning(f'  xfs_db fehlgeschlagen: {e} — TSK Fallback')
+        return _analyse_xfs(image_path, offset)
+
+
 def run(ctx: PipelineContext) -> PipelineContext:
-    log.info('Stage 5: TSK Fallback aktiv')
+    log.info('Stage 5: Disk-Forensik')
     ctx.tsk_fallback_used = True
     ctx.ioc_quality       = 'MITTEL'
     results               = {}
     total_log_extracted   = 0
 
-    partitions = _read_partitions(ctx.disk_image_path)
-    log.info(f'  {len(partitions)} Partitionen gefunden')
+    # Partitionen aus Stage 02 übernehmen falls vorhanden, sonst neu lesen
+    if ctx.partition_layout:
+        partitions = [{'start': p['offset'], 'size': int(p['size_mb'] * 1024 * 1024 / 512),
+                       'index': p['index']} for p in ctx.partition_layout if p['analysable']]
+        log.info(f'  {len(partitions)} analysierbare Partitionen aus Stage 02')
+    else:
+        partitions = _read_partitions(ctx.disk_image_path)
+        log.info(f'  {len(partitions)} Partitionen gefunden (Stage 02 nicht gelaufen)')
 
     for part in partitions:
         offset  = part['start']
+        # Tool aus Stage 02 Tool-Auswahl lesen, sonst Dateisystem erkennen
+        tool    = ctx.tool_selection.get(str(offset), '')
         fs_type = _detect_filesystem(ctx.disk_image_path, offset)
-        log.info(f'  Partition offset={offset} fs={fs_type}')
+        if not tool:
+            tool = 'xfs_db' if fs_type == 'xfs' else 'tsk'
+        log.info(f'  Partition offset={offset} fs={fs_type} tool={tool}')
 
         if fs_type in FS_TYPES:
             part_result = _analyse_partition(ctx.disk_image_path, offset, fs_type)
         elif fs_type == 'xfs':
-            part_result = _analyse_xfs(ctx.disk_image_path, offset)
+            part_result = _analyse_xfs_native(ctx.disk_image_path, offset)
         else:
             log.warning(f'  Unbekanntes Dateisystem: {fs_type} — übersprungen')
             ctx.tsk_partitions.append({

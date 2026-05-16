@@ -122,10 +122,19 @@ def _check_secure_delete(ctx: PipelineContext) -> List[Dict]:
     return hits
 
 
+def _get_yara_rules_dir(yara_mode: str) -> Path:
+    base = Path(__file__).parent.parent / 'data' / 'yara-rules'
+    if yara_mode == 'linux': return base / 'linux'
+    if yara_mode == 'full':  return base
+    return base / 'custom'
+
+
 def _check_yara(ctx: PipelineContext) -> List[Dict]:
     hits = []
-    rules_dir = Path(__file__).parent.parent / 'data' / 'yara-rules'
+    rules_dir = _get_yara_rules_dir(ctx.yara_mode)
+    log.info(f'  YARA-Modus: {ctx.yara_mode} → {rules_dir}')
     if not rules_dir.exists():
+        log.warning(f'  YARA-Regelordner nicht gefunden: {rules_dir}')
         return hits
     try:
         import yara

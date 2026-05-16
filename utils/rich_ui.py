@@ -18,14 +18,14 @@ console = Console()
 
 STAGE_INFO = {
     'stage_01':   ('01',    'Dateierkennung & Beweissicherung'),
-    'stage_02':   ('02',    'RAM-Analyse (Volatility3)'),
+    'stage_02':   ('02',    'Partition-Layout'),
     'stage_03':   ('03',    'System-Profiling'),
-    'stage_05':   ('05',    'TSK Fallback'),
+    'stage_03_5': ('03.5',  'Basic Checks'),
+    'stage_05':   ('05',    'Disk-Forensik'),
     'stage_06':   ('06',    'Log-Parsing (38 Parser)'),
     'stage_07':   ('07',    'IOC-Extraktion'),
     'stage_08':   ('08',    'Datennormalisierung'),
     'stage_09':   ('09',    'Anti-Forensics-Erkennung'),
-    'stage_8.5':  ('8.5',   'Forensischer Analyse-Algorithmus'),
     'stage_13':   ('13',    'Qualitätsprüfung'),
     'stage_14':   ('14',    'Export & Archivierung'),
 }
@@ -178,6 +178,9 @@ class PipelineUI:
         t.add_row('Größe',      f'{ctx.file_size_gb:.2f} GB')
         t.add_row('SHA256',     ctx.sha256[:32] + '...' if ctx.sha256 else '?')
         t.add_row('MD5',        ctx.md5[:32] + '...' if ctx.md5 else '?')
+        hash_src = getattr(ctx, 'hash_source', 'Berechnet')
+        hash_style = 'green' if hash_src == 'E01-eingebettet' else 'dim'
+        t.add_row('Hash-Quelle', Text(f'✅ {hash_src}' if hash_src == 'E01-eingebettet' else hash_src, style=hash_style))
         if ctx.coc:
             t.add_row('Chain of Custody', ctx.coc.start_time.strftime('%Y-%m-%d %H:%M:%S UTC'))
         if ctx.case_dir:
@@ -201,8 +204,44 @@ class PipelineUI:
                 if entries:
                     t.add_row(f'  {plugin}', f'{len(entries):,} Einträge')
         console.print(Panel(t,
-            title='[bold cyan]Stage 02 — RAM-Analyse (Volatility3)[/bold cyan]',
+            title='[bold cyan]Stage 02 — Partition-Layout[/bold cyan]',
             border_style='cyan', padding=(0, 1)))
+
+    def show_stage02_partition_detail(self, ctx) -> None:
+        layout = getattr(ctx, 'partition_layout', [])
+        if not layout:
+            return
+        t = Table(box=box.SIMPLE, show_header=True, border_style='cyan', expand=True)
+        t.add_column('Nr',          style='bold', width=4)
+        t.add_column('Offset',      width=12)
+        t.add_column('Größe',       width=12)
+        t.add_column('Dateisystem', width=12)
+        t.add_column('Rolle',       width=12)
+        t.add_column('OS',          min_width=18)
+        t.add_column('Tool',        width=10)
+
+        for p in layout:
+            role_style = 'green' if p['role'] == 'ROOT/DATA' else ('dim' if p['role'] in ('SWAP','BOOT') else 'yellow')
+            tool_txt   = p['tool'] if p['analysable'] else '—'
+            tool_style = 'green' if p['analysable'] else 'dim'
+            t.add_row(
+                str(p['index']),
+                f"{p['offset']:,}",
+                f"{p['size_mb']:.0f} MB",
+                p['fs_type'],
+                Text(p['role'], style=role_style),
+                p['os_name'] or '—',
+                Text(tool_txt, style=tool_style),
+            )
+
+        multi_os = getattr(ctx, 'multi_os_detected', False)
+        n_anal   = len(getattr(ctx, 'analysis_partitions', []))
+        console.print(Panel(
+            t,
+            title='[bold cyan]Stage 02 — Partition-Layout[/bold cyan]',
+            border_style='cyan', padding=(0, 1),
+            subtitle=f'Analysierbar: {n_anal}  |  Multi-OS: {"⚠️ Ja" if multi_os else "Nein"}',
+        ))
 
     def show_stage03_detail(self, ctx) -> None:
         t = Table(box=box.ROUNDED, show_header=False, border_style='cyan', expand=True)
@@ -212,10 +251,67 @@ class PipelineUI:
         t.add_row('OS-Familie',     ctx.os_family   or 'Unbekannt')
         t.add_row('Kernel',         ctx.kernel_version or 'Unbekannt')
         t.add_row('Hostname',       ctx.hostname    or 'Unbekannt')
-        t.add_row('Zeitzone',       ctx.timezone    or 'UTC')
+        tz_disp = getattr(ctx, 'timezone_display', '') or ctx.timezone or 'UTC'
+        t.add_row('Zeitzone',       tz_disp)
+        mid = getattr(ctx, 'machine_id', '')
+        if mid:
+            t.add_row('Machine-ID', mid[:32] + ('...' if len(mid) > 32 else ''))
+        ips = getattr(ctx, 'ip_addresses', [])
+        if ips:
+            t.add_row('IP-Adressen', ', '.join(ips[:5]))
+
+        # Nutzer-Profil
+        users         = getattr(ctx, 'users', [])
+        shadow_mtime  = getattr(ctx, 'shadow_mtime', '')
+        notable_users = getattr(ctx, 'notable_users', [])
+        if users:
+            system_count  = sum(1 for u in users if u.get('is_system'))
+            regular_count = len(users) - system_count
+            login_allowed = [u['name'] for u in users if u.get('login_allowed')]
+            t.add_row('─── Nutzer-Profil ───', '')
+            t.add_row('Nutzer gesamt', f'{len(users)}  ({system_count} System, {regular_count} regulär)')
+            t.add_row('Login-berechtigt', ', '.join(login_allowed[:5]) or '—')
+            pw_list = []
+            for u in users[:8]:
+                icon = '✅' if u.get('has_password') else '❌'
+                pw_list.append(f"{icon} {u['name']}")
+            t.add_row('Passwort gesetzt', '  '.join(pw_list))
+            if shadow_mtime:
+                t.add_row('/etc/shadow', f'Letzte Änderung: {shadow_mtime}')
+            if notable_users:
+                for n in notable_users[:3]:
+                    t.add_row('⚠️  Auffällig', Text(n, style='bold yellow'))
+
         console.print(Panel(t,
             title='[bold cyan]Stage 03 — System-Profiling[/bold cyan]',
             border_style='cyan', padding=(0, 1)))
+
+    def show_stage035_detail(self, ctx) -> None:
+        checks         = getattr(ctx, 'basic_checks', [])
+        anomaly_count  = getattr(ctx, 'basic_check_anomalies', 0)
+        if not checks:
+            return
+        t = Table(box=box.SIMPLE, show_header=True, border_style='cyan', expand=True)
+        t.add_column('Service/Log',  min_width=22)
+        t.add_column('Erwartet',     width=10)
+        t.add_column('Gefunden',     width=10)
+        t.add_column('Status',       min_width=30)
+
+        for c in checks:
+            expected_txt = Text('Pflicht' if c['expected'] else '—',
+                                style='dim' if not c['expected'] else 'white')
+            found_txt    = Text('✅ Ja' if c['found'] else '❌ Nein',
+                                style='green' if c['found'] else 'red')
+            status_style = 'green' if not c['anomaly'] else 'bold yellow'
+            t.add_row(c['service'], expected_txt, found_txt,
+                      Text(c['status'], style=status_style))
+
+        console.print(Panel(
+            t,
+            title=f'[bold cyan]Stage 03.5 — Basic Checks ({ctx.os_name or ctx.os_family})[/bold cyan]',
+            border_style='cyan', padding=(0, 1),
+            subtitle=f'Anomalien: {anomaly_count}' if anomaly_count else 'Keine Anomalien ✅',
+        ))
 
     def show_stage05_detail(self, ctx) -> None:
         t = Table(box=box.ROUNDED, show_header=False,
