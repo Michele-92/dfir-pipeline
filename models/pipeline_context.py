@@ -132,6 +132,7 @@ class PipelineContext:
     users:              List[dict] = field(default_factory=list)
     shadow_mtime:       str        = ''
     notable_users:      List[str]  = field(default_factory=list)
+    partition_profiles: List[dict] = field(default_factory=list)
 
     # ── Stage 03.5: Basic Checks ──────────────────────────
     basic_checks:          List[dict] = field(default_factory=list)

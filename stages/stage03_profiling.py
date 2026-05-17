@@ -78,11 +78,53 @@ def run(ctx: PipelineContext) -> PipelineContext:
     # User-Profiling
     ctx.users, ctx.shadow_mtime, ctx.notable_users = _profile_users(ctx.disk_image_path)
 
+    # ── Per-Partition Profiling ───────────────────────────────────────
+    primary_offset = ctx.primary_partition.get('offset') if ctx.primary_partition else None
+
+    primary_profile = {
+        'is_primary':       True,
+        'partition_index':  ctx.primary_partition.get('index', '?') if ctx.primary_partition else '?',
+        'size_mb':          ctx.primary_partition.get('size_mb', 0)  if ctx.primary_partition else 0,
+        'fs_type':          ctx.primary_partition.get('fs_type', '')  if ctx.primary_partition else '',
+        'offset':           primary_offset or 0,
+        'os_name':          ctx.os_name,
+        'os_family':        ctx.os_family,
+        'hostname':         ctx.hostname,
+        'timezone':         ctx.timezone,
+        'timezone_display': ctx.timezone_display,
+        'kernel_version':   ctx.kernel_version,
+        'machine_id':       ctx.machine_id,
+        'ip_addresses':     ctx.ip_addresses,
+        'users':            ctx.users,
+        'notable_users':    ctx.notable_users,
+    }
+    partition_profiles = [primary_profile]
+
+    secondary = sorted(
+        [p for p in ctx.analysis_partitions if p.get('offset') != primary_offset],
+        key=lambda x: x['size_mb'], reverse=True
+    )
+    for p in secondary:
+        log.info(f'  Profiling Partition {p["index"]} (offset={p["offset"]}) via TSK...')
+        prof = _profile_partition_tsk(ctx.disk_image_path, p['offset'])
+        prof.update({
+            'is_primary':      False,
+            'partition_index': p['index'],
+            'size_mb':         p['size_mb'],
+            'fs_type':         p['fs_type'],
+            'offset':          p['offset'],
+            'ip_addresses':    [],
+        })
+        partition_profiles.append(prof)
+
+    ctx.partition_profiles = partition_profiles
+
     log.info(f'  OS: {ctx.os_name} ({ctx.os_family}), Kernel: {ctx.kernel_version}')
     log.info(f'  Hostname: {ctx.hostname}, TZ: {ctx.timezone_display}')
     log.info(f'  Nutzer: {len(ctx.users)} ({len(ctx.notable_users)} auffällig)')
+    log.info(f'  Partition-Profile: {len(partition_profiles)} erstellt')
     if ctx.coc:
-        ctx.coc.add_entry('stage_03', f'Profiling: {ctx.os_name} | {len(ctx.users)} Nutzer')
+        ctx.coc.add_entry('stage_03', f'Profiling: {ctx.os_name} | {len(ctx.users)} Nutzer | {len(partition_profiles)} Partitionen')
     return ctx
 
 
@@ -92,6 +134,113 @@ def _parse_target_line(output: str) -> str:
         if line.startswith('<Target ') and '>' in line:
             return line.split('>', 1)[-1].strip()
     return ''
+
+
+def _index_partition(image_path: Path, offset: int) -> dict:
+    """Erstellt Datei-Index {path → inode} einer Partition via fls -r -p."""
+    fls_cmd = shutil.which('fls') or 'fls'
+    index   = {}
+    try:
+        res = subprocess.run(
+            [fls_cmd, '-r', '-p', '-o', str(offset), str(image_path)],
+            capture_output=True, text=True, timeout=60, errors='replace'
+        )
+        for line in res.stdout.splitlines():
+            if '\t' not in line:
+                continue
+            meta, path = line.split('\t', 1)
+            parts = meta.strip().split()
+            inode = parts[-1].rstrip(':')
+            path_norm = path.strip().lstrip('./').lower()
+            index[path_norm] = inode
+    except Exception as e:
+        log.debug(f'  fls Index fehlgeschlagen (offset={offset}): {e}')
+    return index
+
+
+def _read_icat(image_path: Path, offset: int, inode: str) -> str:
+    """Liest Datei-Inhalt via icat."""
+    icat_cmd = shutil.which('icat') or 'icat'
+    try:
+        res = subprocess.run(
+            [icat_cmd, '-o', str(offset), str(image_path), inode],
+            capture_output=True, text=True, timeout=15, errors='replace'
+        )
+        if res.returncode == 0:
+            return res.stdout
+    except Exception:
+        pass
+    return ''
+
+
+def _classify_os_family_from_content(content: str) -> str:
+    """Klassifiziert OS-Familie aus /etc/os-release Inhalt."""
+    c = content.lower()
+    if any(kw in c for kw in ('debian', 'ubuntu', 'kali', 'mint')):   return 'debian'
+    if any(kw in c for kw in ('rhel', 'centos', 'fedora', 'rocky', 'alma', 'red hat')): return 'rhel'
+    if 'arch'   in c: return 'arch'
+    if 'alpine' in c: return 'alpine'
+    return 'unknown'
+
+
+def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
+    """Liest vollständiges OS-Profil einer Partition direkt via TSK."""
+    profile = {
+        'os_name': '', 'os_family': 'unknown',
+        'hostname': 'unknown', 'timezone': 'UTC', 'timezone_display': 'UTC',
+        'kernel_version': '', 'machine_id': '', 'users': [], 'notable_users': [],
+    }
+    index = _index_partition(image_path, offset)
+    if not index:
+        return profile
+
+    # OS
+    for os_path in ('etc/os-release', 'usr/lib/os-release'):
+        if os_path in index:
+            content = _read_icat(image_path, offset, index[os_path])
+            if content and 'NAME=' in content:
+                profile['os_name']   = _extract_os_name(content)
+                profile['os_family'] = _classify_os_family_from_content(content)
+                break
+
+    # Hostname
+    if 'etc/hostname' in index:
+        raw = _read_icat(image_path, offset, index['etc/hostname'])
+        if raw:
+            profile['hostname'] = raw.strip()
+
+    # Timezone
+    if 'etc/timezone' in index:
+        raw = _read_icat(image_path, offset, index['etc/timezone'])
+        if raw:
+            profile['timezone']         = raw.strip()
+            profile['timezone_display'] = _format_timezone_display(raw.strip())
+
+    # Machine-ID
+    if 'etc/machine-id' in index:
+        raw = _read_icat(image_path, offset, index['etc/machine-id'])
+        if raw:
+            profile['machine_id'] = raw.strip()
+
+    # Kernel (aus /boot/vmlinuz-* Dateinamen)
+    for path in sorted(index.keys()):
+        if path.startswith('boot/vmlinuz-'):
+            ver = path.replace('boot/vmlinuz-', '').strip()
+            if ver:
+                profile['kernel_version'] = ver
+                break
+
+    # Users aus /etc/passwd
+    if 'etc/passwd' in index:
+        raw = _read_icat(image_path, offset, index['etc/passwd'])
+        if raw:
+            profile['users'] = _parse_users(raw)
+            profile['notable_users'] = [
+                u['name'] for u in profile['users']
+                if not u.get('is_system', True) and u.get('login_allowed', False)
+            ]
+
+    return profile
 
 
 def _read_os_release(image_path) -> str:
