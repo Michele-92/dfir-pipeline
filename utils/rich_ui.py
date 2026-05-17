@@ -317,10 +317,24 @@ class PipelineUI:
         ))
 
     def show_stage035_detail(self, ctx) -> None:
-        checks         = getattr(ctx, 'basic_checks', [])
-        anomaly_count  = getattr(ctx, 'basic_check_anomalies', 0)
+        checks        = getattr(ctx, 'basic_checks', [])
+        anomaly_count = getattr(ctx, 'basic_check_anomalies', 0)
+        os_label      = ctx.os_name or ctx.os_family or 'Unbekannt'
+
         if not checks:
+            t = Table(box=box.SIMPLE, show_header=False, expand=True)
+            t.add_column('Info', style='dim')
+            t.add_row(f'OS-Familie "{ctx.os_family}" — kein Profil vorhanden')
+            t.add_row('Unterstützte Familien: debian · rhel · arch')
+            t.add_row('Basic Checks werden durchgeführt sobald OS erkannt wird.')
+            console.print(Panel(
+                t,
+                title=f'[bold cyan]Stage 03.5 — Basic Checks ({os_label})[/bold cyan]',
+                border_style='cyan', padding=(0, 1),
+                subtitle='[dim]⏭ Übersprungen[/dim]',
+            ))
             return
+
         t = Table(box=box.SIMPLE, show_header=True, border_style='cyan', expand=True)
         t.add_column('Service/Log',  min_width=22)
         t.add_column('Erwartet',     width=10)
@@ -338,9 +352,9 @@ class PipelineUI:
 
         console.print(Panel(
             t,
-            title=f'[bold cyan]Stage 03.5 — Basic Checks ({ctx.os_name or ctx.os_family})[/bold cyan]',
+            title=f'[bold cyan]Stage 03.5 — Basic Checks ({os_label})[/bold cyan]',
             border_style='cyan', padding=(0, 1),
-            subtitle=f'Anomalien: {anomaly_count}' if anomaly_count else 'Keine Anomalien ✅',
+            subtitle=f'[bold yellow]Anomalien: {anomaly_count}[/bold yellow]' if anomaly_count else '[bold green]Keine Anomalien ✅[/bold green]',
         ))
 
     def show_stage05_detail(self, ctx) -> None:
