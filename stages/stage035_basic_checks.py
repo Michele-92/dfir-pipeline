@@ -47,6 +47,19 @@ EXPECTED_SERVICES = {
             'nginx':  ['/var/log/nginx/'],
         }
     },
+    'alpine': {
+        'mandatory': {
+            'messages': '/var/log/messages',
+            'auth':     '/var/log/auth.log',
+        },
+        'if_installed': {
+            'nginx':      ['/var/log/nginx/access.log', '/var/log/nginx/error.log'],
+            'apache2':    ['/var/log/apache2/access.log', '/var/log/apache2/error.log'],
+            'mysql':      ['/var/log/mysql/error.log'],
+            'docker':     ['/var/log/docker.log'],
+            'samba':      ['/var/log/samba/log.smbd'],
+        }
+    },
 }
 
 

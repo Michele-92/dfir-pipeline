@@ -325,7 +325,7 @@ class PipelineUI:
             t = Table(box=box.SIMPLE, show_header=False, expand=True)
             t.add_column('Info', style='dim')
             t.add_row(f'OS-Familie "{ctx.os_family}" — kein Profil vorhanden')
-            t.add_row('Unterstützte Familien: debian · rhel · arch')
+            t.add_row('Unterstützte Familien: debian · rhel · arch · alpine')
             t.add_row('Basic Checks werden durchgeführt sobald OS erkannt wird.')
             console.print(Panel(
                 t,
