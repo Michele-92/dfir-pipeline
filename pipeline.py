@@ -138,15 +138,15 @@ def main():
         ctx = run_stage(stage03_profiling.run,          ctx, 'stage_03',   ui)
         ui.show_stage03_detail(ctx)
 
-        ctx = run_stage(stage035_basic_checks.run,      ctx, 'stage_03_5', ui)
-        ui.show_stage035_detail(ctx)
-
         # ctx = run_stage(stage04_disk.run,          ctx, 'stage_04',   ui)
         # ctx = run_stage(stage04_1_autopsy.run,     ctx, 'stage_04_1', ui,
         #                 force=args.force_autopsy, skip=args.no_autopsy)
 
         ctx = run_stage(stage05_tsk.run,           ctx, 'stage_05',   ui)
-        ui.show_stage05_detail(ctx)  # Partitionen + Log-Dateien sofort sichtbar
+        ui.show_stage05_detail(ctx)
+
+        ctx = run_stage(stage035_basic_checks.run,      ctx, 'stage_03_5', ui)
+        ui.show_stage035_detail(ctx)
 
         ctx = run_stage(stage06_logs.run,          ctx, 'stage_06',   ui)
         ui.show_parser_detail(ctx)
