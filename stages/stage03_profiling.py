@@ -97,6 +97,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
         'ip_addresses':     ctx.ip_addresses,
         'users':            ctx.users,
         'notable_users':    ctx.notable_users,
+        'shadow_mtime':     ctx.shadow_mtime,
     }
     partition_profiles = [primary_profile]
 
@@ -173,6 +174,22 @@ def _read_icat(image_path: Path, offset: int, inode: str) -> str:
     return ''
 
 
+def _read_shadow_mtime_tsk(image_path: Path, offset: int, inode: str) -> str:
+    """Liest Modifikationszeit von /etc/shadow via istat."""
+    istat_cmd = shutil.which('istat') or 'istat'
+    try:
+        res = subprocess.run(
+            [istat_cmd, '-o', str(offset), str(image_path), inode],
+            capture_output=True, text=True, timeout=10, errors='replace'
+        )
+        for line in res.stdout.splitlines():
+            if line.strip().lower().startswith('modified:'):
+                return line.split(':', 1)[1].strip()
+    except Exception:
+        pass
+    return ''
+
+
 def _classify_os_family_from_content(content: str) -> str:
     """Klassifiziert OS-Familie aus /etc/os-release Inhalt."""
     c = content.lower()
@@ -239,6 +256,11 @@ def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
                 u['name'] for u in profile['users']
                 if not u.get('is_system', True) and u.get('login_allowed', False)
             ]
+
+    # /etc/shadow mtime via istat
+    profile['shadow_mtime'] = ''
+    if 'etc/shadow' in index:
+        profile['shadow_mtime'] = _read_shadow_mtime_tsk(image_path, offset, index['etc/shadow'])
 
     return profile
 

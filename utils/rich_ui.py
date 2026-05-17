@@ -262,27 +262,27 @@ class PipelineUI:
             tz = profile.get('timezone_display') or profile.get('timezone') or 'UTC'
             t.add_row('Zeitzone', tz)
             mid = profile.get('machine_id', '')
-            if mid:
-                t.add_row('Machine-ID', mid[:32] + ('...' if len(mid) > 32 else ''))
+            t.add_row('Machine-ID',  mid[:32] + ('...' if len(mid) > 32 else '') if mid else Text('nicht vorhanden', style='dim'))
             ips = profile.get('ip_addresses', [])
-            if ips:
-                t.add_row('IP-Adressen', ', '.join(ips[:5]))
+            t.add_row('IP-Adressen', ', '.join(ips[:5]) if ips else Text('nicht vorhanden', style='dim'))
 
             users         = profile.get('users', [])
             notable_users = profile.get('notable_users', [])
+            t.add_row('─── Nutzer-Profil ───', '')
             if users:
                 system_count  = sum(1 for u in users if u.get('is_system'))
                 regular_count = len(users) - system_count
                 login_allowed = [u['name'] for u in users if u.get('login_allowed')]
-                t.add_row('─── Nutzer-Profil ───', '')
                 t.add_row('Nutzer gesamt',    f'{len(users)}  ({system_count} System, {regular_count} regulär)')
                 t.add_row('Login-berechtigt', ', '.join(login_allowed[:5]) or '—')
                 pw_list = [('✅' if u.get('has_password') else '❌') + f' {u["name"]}' for u in users[:8]]
                 t.add_row('Passwort gesetzt', '  '.join(pw_list))
-                if is_primary and shadow_mtime:
-                    t.add_row('/etc/shadow', f'Letzte Änderung: {shadow_mtime}')
                 for n in notable_users[:3]:
                     t.add_row('⚠️  Auffällig', Text(n, style='bold yellow'))
+            else:
+                t.add_row('Nutzer', Text('nicht vorhanden', style='dim'))
+            sm = profile.get('shadow_mtime', '')
+            t.add_row('/etc/shadow', f'Letzte Änderung: {sm}' if sm else Text('nicht vorhanden', style='dim'))
             return t
 
         inner_panels = []
