@@ -1,4 +1,5 @@
 import logging
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,10 +104,57 @@ def _read_os_release(image_path) -> str:
         )
         if result.returncode != 0:
             log.debug(f'target-query os stderr: {result.stderr.strip()}')
-        return _parse_target_line(result.stdout) or result.stdout.strip()
+        raw = _parse_target_line(result.stdout) or result.stdout.strip()
+        if raw and raw.lower() not in ('linux', 'unknown', ''):
+            return raw
     except Exception as e:
         log.debug(f'target-query os fehlgeschlagen: {e}')
-        return ''
+    log.debug('  OS-Erkennung: target-query zu generisch — TSK Fallback auf /etc/os-release')
+    return _read_os_release_tsk(image_path)
+
+
+def _read_os_release_tsk(image_path) -> str:
+    """Liest /etc/os-release direkt via TSK fls+icat wenn target-query zu generisch ist."""
+    mmls_cmd = shutil.which('mmls') or 'mmls'
+    fls_cmd  = shutil.which('fls')  or 'fls'
+    icat_cmd = shutil.which('icat') or 'icat'
+    try:
+        mmls_res = subprocess.run(
+            [mmls_cmd, str(image_path)],
+            capture_output=True, text=True, timeout=30
+        )
+        offsets = []
+        for line in mmls_res.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and parts[0].rstrip(':').isdigit():
+                try:
+                    offsets.append(int(parts[2]))
+                except ValueError:
+                    continue
+
+        for offset in offsets:
+            try:
+                fls_res = subprocess.run(
+                    [fls_cmd, '-r', '-p', '-o', str(offset), str(image_path)],
+                    capture_output=True, text=True, timeout=45, errors='replace'
+                )
+                for line in fls_res.stdout.splitlines():
+                    if 'etc/os-release' in line.lower() and '\t' in line:
+                        # Format: "r/r [*] INODE:\tPATH"
+                        meta  = line.split('\t')[0].strip()
+                        inode = meta.split()[-1].rstrip(':')
+                        icat_res = subprocess.run(
+                            [icat_cmd, '-o', str(offset), str(image_path), inode],
+                            capture_output=True, text=True, timeout=15, errors='replace'
+                        )
+                        if icat_res.returncode == 0 and 'NAME=' in icat_res.stdout:
+                            log.debug(f'  /etc/os-release via TSK (offset={offset}, inode={inode})')
+                            return icat_res.stdout.strip()
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+    except Exception as e:
+        log.debug(f'TSK os-release Fallback fehlgeschlagen: {e}')
+    return ''
 
 
 def _extract_os_name(os_release: str) -> str:
@@ -169,7 +217,7 @@ def _format_timezone_display(tz_name: str) -> str:
     try:
         import pytz
         tz_obj    = pytz.timezone(tz_name)
-        offset    = tz_obj.utcoffset(datetime.now(timezone.utc))
+        offset    = tz_obj.utcoffset(datetime.now())
         total_sec = int(offset.total_seconds())
         h         = abs(total_sec) // 3600
         m         = (abs(total_sec) % 3600) // 60

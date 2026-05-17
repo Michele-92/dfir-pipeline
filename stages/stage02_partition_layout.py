@@ -205,53 +205,63 @@ def _ask_tool_selection(index: int, fs_type: str, size_mb: float,
                         suggestion: str, reason: str,
                         role: str = '', os_name: str = '',
                         os_family: str = '', total: int = 1) -> str:
-    """Interaktive Tool-Auswahl im --mode manual — Variante C mit Rich."""
+    """Interaktive Tool-Auswahl im --mode manual — Rich Panel mit blauem Border."""
     from rich.console import Console
     from rich.table   import Table
-    from rich        import box as rbox
+    from rich.panel   import Panel
+    from rich.text    import Text
+    from rich         import box as rbox
 
-    console = Console()
-    all_tools   = [('tsk', True), ('xfs_db', bool(shutil.which('xfs_db'))),
-                   ('btrfs', bool(shutil.which('btrfs'))), ('debugfs', bool(shutil.which('debugfs')))]
+    console   = Console()
+    all_tools = [
+        ('tsk',     True),
+        ('xfs_db',  bool(shutil.which('xfs_db'))),
+        ('btrfs',   bool(shutil.which('btrfs'))),
+        ('debugfs', bool(shutil.which('debugfs'))),
+    ]
     role_icon = ROLE_ICON.get(role, '📂')
     os_icon   = OS_ICON.get(os_family, '🖥️')
 
-    # ── Info-Block ────────────────────────────────────────────────────
-    width = 56
-    sep   = '─' * width
-    print(f'\n  ┌{sep}┐')
-    print(f'  │  🖴  Partition {index} von {total}{" " * (width - 18 - len(str(index)) - len(str(total)))}│')
-    print(f'  │  ├─ Dateisystem:  {fs_type:<36}│')
-    print(f'  │  ├─ Größe:        {size_mb:,.0f} MB{" " * (36 - len(f"{size_mb:,.0f} MB"))}│')
-    print(f'  │  ├─ Rolle:        {role_icon} {role:<34}│')
-    if os_name:
-        os_line = f'{os_icon} {os_name}'
-        print(f'  │  └─ OS erkannt:   {os_line:<35}│')
-    else:
-        print(f'  │  └─ OS erkannt:   {"—":<35}│')
-    print(f'  ├{sep}┤')
-    print(f'  │{" " * width}│')
+    tbl = Table(box=rbox.SIMPLE, show_header=False, expand=True, padding=(0, 2))
+    tbl.add_column('Label', min_width=22)
+    tbl.add_column('Wert',  style='white')
 
-    # ── Tool-Auswahl ─────────────────────────────────────────────────
+    tbl.add_row(Text('Dateisystem', style='dim'), Text(fs_type,             style='bold white'))
+    tbl.add_row(Text('Größe',       style='dim'), f'{size_mb:,.0f} MB')
+    tbl.add_row(Text('Rolle',       style='dim'), f'{role_icon}  {role}')
+    if os_name:
+        tbl.add_row(Text('OS erkannt', style='dim'), f'{os_icon}  {os_name}')
+    tbl.add_row('', '')
+
     for i, (tool, available) in enumerate(all_tools, 1):
         icon, name, desc = TOOL_DISPLAY[tool]
-        top_badge  = '  ✅ TOP' if tool == suggestion else ''
-        avail_mark = '' if available else '  ⚠️ nicht installiert'
-        line = f'{icon}  [{i}]  {name:<10}{desc}{top_badge}{avail_mark}'
-        print(f'  │  {line:<{width - 2}}│')
+        is_top  = tool == suggestion
+        label   = Text(f'{icon}  [{i}]  {name}', style='bold bright_white' if is_top else 'white')
+        badges  = []
+        if is_top:
+            badges.append('[bold green]✅ Empfohlen[/bold green]')
+        if not available:
+            badges.append('[bold yellow]⚠ nicht installiert[/bold yellow]')
+        value = Text.from_markup(f'{desc}    ' + '  '.join(badges) if badges else desc)
+        tbl.add_row(label, value)
 
-    print(f'  │{" " * width}│')
-    print(f'  └{sep}┘')
+    tbl.add_row('', '')
 
-    # ── Eingabe ───────────────────────────────────────────────────────
+    console.print(Panel(
+        tbl,
+        title=f'[bold bright_blue]🖴  Partition {index} von {total} — Tool-Auswahl[/bold bright_blue]',
+        border_style='bright_blue',
+        padding=(1, 2),
+    ))
+
     sugg_icon = TOOL_DISPLAY[suggestion][0]
-    raw = input(f'         ↳ Enter für {sugg_icon} {suggestion}  oder  Zahl eingeben:  ').strip()
+    raw = input(f'   ↳ Enter = {sugg_icon} {suggestion}  oder  Zahl [1-4]:  ').strip()
 
     tool_list = [t for t, _ in all_tools]
     if raw.isdigit() and 1 <= int(raw) <= len(tool_list):
         chosen = tool_list[int(raw) - 1]
         if not all_tools[int(raw) - 1][1]:
-            print(f'  ⚠️  {chosen} nicht installiert — Fallback auf TSK')
+            console.print(f'  [bold yellow]⚠[/bold yellow]  {chosen} nicht installiert — Fallback auf TSK')
             return 'tsk'
         return chosen
     return suggestion
