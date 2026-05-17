@@ -107,6 +107,16 @@ def run(ctx: PipelineContext) -> PipelineContext:
                         'anomaly_type':'log_without_install',
                     })
                     log.info(f'  [LOG OHNE INSTALL ⚠️] {pkg}: {lp}')
+                else:
+                    checks.append({
+                        'service':     pkg,
+                        'log_path':    lp,
+                        'expected':    False,
+                        'found':       False,
+                        'status':      'nicht installiert',
+                        'anomaly':     '',
+                        'anomaly_type':'',
+                    })
         else:
             # Paket installiert → prüfe ob Logs vorhanden
             for lp in log_paths:

@@ -346,7 +346,12 @@ class PipelineUI:
                                 style='dim' if not c['expected'] else 'white')
             found_txt    = Text('✅ Ja' if c['found'] else '❌ Nein',
                                 style='green' if c['found'] else 'red')
-            status_style = 'green' if not c['anomaly'] else 'bold yellow'
+            if c['status'] == 'nicht installiert':
+                status_style = 'dim'
+            elif not c['anomaly']:
+                status_style = 'green'
+            else:
+                status_style = 'bold yellow'
             t.add_row(c['service'], expected_txt, found_txt,
                       Text(c['status'], style=status_style))
 
