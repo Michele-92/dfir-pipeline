@@ -146,6 +146,15 @@ def _detect_role(fs_type: str, size_mb: float) -> str:
     return 'UNBEKANNT'
 
 
+def _parse_target_line(output: str) -> str:
+    """Extrahiert den Inhalt nach '<Target ...>' aus target-query Ausgabe."""
+    for line in reversed(output.splitlines()):
+        line = line.strip()
+        if line.startswith('<Target ') and '>' in line:
+            return line.split('>', 1)[-1].strip()
+    return ''
+
+
 def _detect_os(image_path: Path, offset: int) -> tuple[str, str]:
     """Versucht OS via target-query zu erkennen — mit offset falls unterstützt."""
     try:
@@ -153,12 +162,11 @@ def _detect_os(image_path: Path, offset: int) -> tuple[str, str]:
             ['target-query', '-f', 'os', str(image_path)],
             capture_output=True, text=True, timeout=30
         )
-        raw = result.stdout.strip()
-        if not raw:
+        raw = _parse_target_line(result.stdout) or result.stdout.strip()
+        if not raw or raw.lower() in ('linux', 'unknown'):
             return '', ''
-        os_name   = raw
         os_family = _classify_os_family(raw.lower())
-        return os_name, os_family
+        return raw, os_family
     except Exception:
         return '', ''
 
@@ -180,14 +188,14 @@ def _suggest_tool(fs_type: str) -> tuple[str, str]:
 
 TOOL_DISPLAY = {
     'tsk':      ('⚡', 'TSK',     'ext4 · NTFS · FAT32'),
-    'xfs_db':   ('🗄️', 'xfs_db', 'XFS Enterprise nativ'),
+    'xfs_db':   ('💾', 'xfs_db', 'XFS Enterprise nativ'),
     'btrfs':    ('📦', 'btrfs',  'Btrfs Subvolumes nativ'),
     'debugfs':  ('🔬', 'debugfs','ext Tiefenanalyse'),
 }
 
 ROLE_ICON = {
     'ROOT/DATA': '💻',
-    'BOOT':      '🥾',
+    'BOOT':      '💽',
     'SWAP':      '♻️',
     'WINDOWS':   '🪟',
     'UNBEKANNT': '❓',
@@ -250,6 +258,7 @@ def _ask_tool_selection(index: int, fs_type: str, size_mb: float,
         title=f'[bold bright_blue]🖴  Partition {index} von {total} — Tool-Auswahl[/bold bright_blue]',
         border_style='bright_blue',
         padding=(1, 2),
+        width=console.width,
     ))
 
     sugg_icon = TOOL_DISPLAY[suggestion][0]
