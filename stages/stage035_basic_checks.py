@@ -96,9 +96,11 @@ def run(ctx: PipelineContext) -> PipelineContext:
         if pkg not in installed:
             # Paket nicht installiert → prüfe ob trotzdem Logs vorhanden
             for lp in log_paths:
+                log_name = lp.rstrip('/').split('/')[-1]
+                svc_label = f'{pkg}  ({log_name})' if len(log_paths) > 1 else pkg
                 if _is_present(lp, extracted):
                     checks.append({
-                        'service':     pkg,
+                        'service':     svc_label,
                         'log_path':    lp,
                         'expected':    False,
                         'found':       True,
@@ -109,7 +111,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
                     log.info(f'  [LOG OHNE INSTALL ⚠️] {pkg}: {lp}')
                 else:
                     checks.append({
-                        'service':     pkg,
+                        'service':     svc_label,
                         'log_path':    lp,
                         'expected':    False,
                         'found':       False,
@@ -120,10 +122,12 @@ def run(ctx: PipelineContext) -> PipelineContext:
         else:
             # Paket installiert → prüfe ob Logs vorhanden
             for lp in log_paths:
+                log_name  = lp.rstrip('/').split('/')[-1]
+                svc_label = f'{pkg}  ({log_name})' if len(log_paths) > 1 else pkg
                 found = _is_present(lp, extracted)
                 if not found:
                     checks.append({
-                        'service':     pkg,
+                        'service':     svc_label,
                         'log_path':    lp,
                         'expected':    True,
                         'found':       False,
@@ -134,7 +138,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
                     log.info(f'  [KEIN LOG ⚠️] {pkg} installiert aber {lp} fehlt')
                 else:
                     checks.append({
-                        'service':     pkg,
+                        'service':     svc_label,
                         'log_path':    lp,
                         'expected':    True,
                         'found':       True,

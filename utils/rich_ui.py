@@ -360,6 +360,7 @@ class PipelineUI:
             title=f'[bold cyan]Stage 03.5 — Basic Checks ({os_label})[/bold cyan]',
             border_style='cyan', padding=(0, 1),
             subtitle=f'[bold yellow]Anomalien: {anomaly_count}[/bold yellow]' if anomaly_count else '[bold green]Keine Anomalien ✅[/bold green]',
+            width=console.width,
         ))
 
     def show_stage05_detail(self, ctx) -> None:
