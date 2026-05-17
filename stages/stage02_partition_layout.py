@@ -163,7 +163,7 @@ def _detect_os(image_path: Path, offset: int) -> tuple[str, str]:
             capture_output=True, text=True, timeout=30
         )
         raw = _parse_target_line(result.stdout) or result.stdout.strip()
-        if not raw or raw.lower() in ('linux', 'unknown'):
+        if not raw:
             return '', ''
         os_family = _classify_os_family(raw.lower())
         return raw, os_family
@@ -235,8 +235,7 @@ def _ask_tool_selection(index: int, fs_type: str, size_mb: float,
     tbl.add_row(Text('Dateisystem', style='dim'), Text(fs_type,             style='bold white'))
     tbl.add_row(Text('Größe',       style='dim'), f'{size_mb:,.0f} MB')
     tbl.add_row(Text('Rolle',       style='dim'), f'{role_icon}  {role}')
-    if os_name:
-        tbl.add_row(Text('OS erkannt', style='dim'), f'{os_icon}  {os_name}')
+    tbl.add_row(Text('OS erkannt', style='dim'), f'{os_icon}  {os_name}' if os_name else '—')
     tbl.add_row('', '')
 
     for i, (tool, available) in enumerate(all_tools, 1):
