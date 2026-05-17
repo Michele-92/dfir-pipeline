@@ -157,9 +157,13 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
 
 def _is_present(log_path: str, extracted: set) -> bool:
-    """Prüft ob ein Log-Pfad in den extrahierten Dateien vorkommt."""
-    log_path_lower = log_path.lower()
-    return any(log_path_lower in f.lower() for f in extracted)
+    """Prüft ob ein Log-Pfad in den extrahierten Dateien vorkommt.
+    Stage 05 speichert nur Basenames (z.B. 'messages') — daher Basename-Vergleich."""
+    log_name = log_path.lower().rstrip('/').split('/')[-1]
+    return any(
+        log_name == f.lower() or log_name in f.lower() or f.lower() in log_path.lower()
+        for f in extracted
+    )
 
 
 def _get_installed_packages(ctx: PipelineContext) -> set:
