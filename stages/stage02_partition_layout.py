@@ -206,13 +206,11 @@ def _ask_tool_selection(index: int, fs_type: str, size_mb: float,
                         role: str = '', os_name: str = '',
                         os_family: str = '', total: int = 1) -> str:
     """Interaktive Tool-Auswahl im --mode manual — Rich Panel mit blauem Border."""
-    from rich.console import Console
-    from rich.table   import Table
-    from rich.panel   import Panel
-    from rich.text    import Text
-    from rich         import box as rbox
-
-    console   = Console()
+    from rich.table      import Table
+    from rich.panel      import Panel
+    from rich.text       import Text
+    from rich            import box as rbox
+    from utils.rich_ui   import console  # Live-aware globale Console
     all_tools = [
         ('tsk',     True),
         ('xfs_db',  bool(shutil.which('xfs_db'))),
