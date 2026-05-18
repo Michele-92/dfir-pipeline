@@ -182,7 +182,7 @@ class PipelineUI:
         hash_style = 'green' if hash_src == 'E01-eingebettet' else 'dim'
         t.add_row('Hash-Quelle', Text(f'✅ {hash_src}' if hash_src == 'E01-eingebettet' else hash_src, style=hash_style))
         if ctx.coc:
-            t.add_row('Chain of Custody', ctx.coc.start_time.strftime('%Y-%m-%d %H:%M:%S UTC'))
+            t.add_row('Analyse-Protokoll', ctx.coc.start_time.strftime('%Y-%m-%d %H:%M:%S UTC'))
         if ctx.case_dir:
             t.add_row('Case-Ordner', str(ctx.case_dir))
         console.print(Panel(t,
