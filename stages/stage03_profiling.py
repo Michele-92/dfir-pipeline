@@ -129,7 +129,9 @@ def run(ctx: PipelineContext) -> PipelineContext:
         'notable_users':    ctx.notable_users,
         'unexpected_users': ctx.unexpected_users,
         'shadow_mtime':     ctx.shadow_mtime,
-        'install_time':     '',
+        'install_time':     _read_install_time(
+            ctx.disk_image_path, primary_offset or 0, {}, ctx.os_family
+        ),
     }
     partition_profiles = [primary_profile]
 

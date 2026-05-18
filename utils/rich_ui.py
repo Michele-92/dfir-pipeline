@@ -580,6 +580,14 @@ class PipelineUI:
             t.add_row('pipeline_report.json',
                       Text(f'✅  {js_report}', style='green') if js_report.exists()
                       else Text('❌  nicht erstellt', style='red'))
+            # Neue separate CSV-Dateien
+            for fname in ('activity_timeline.csv', 'system_reboots.csv',
+                          'login_events.csv', 'system_crashes.csv',
+                          'filesystem_timeline.csv'):
+                p = ctx.case_dir / fname
+                t.add_row(fname,
+                          Text(f'✅  {p}', style='green') if p.exists()
+                          else Text('❌  nicht erstellt', style='red'))
         ts_status = ctx.stage_status.get('stage_14_timesketch', '')
         if 'ÜBERSPRUNGEN' in ts_status or not ts_status:
             t.add_row('Timesketch Upload', Text('⏭  übersprungen (--no-timesketch)', style='dim'))
