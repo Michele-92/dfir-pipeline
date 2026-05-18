@@ -267,6 +267,40 @@ class PipelineUI:
             t.add_row('Machine-ID',  mid[:32] + ('...' if len(mid) > 32 else '') if mid else Text('nicht vorhanden', style='dim'))
             ips = profile.get('ip_addresses', [])
             t.add_row('IP-Adressen', ', '.join(ips[:5]) if ips else Text('nicht vorhanden', style='dim'))
+            virt = profile.get('virtualization', '')
+            if virt:
+                virt_style = 'dim' if virt == 'Bare-Metal' else 'cyan'
+                t.add_row('Umgebung', Text(virt, style=virt_style))
+
+            # SSH-Konfiguration
+            ssh = profile.get('ssh_config', {})
+            if ssh:
+                t.add_row('─── SSH-Konfiguration ───', '')
+                root_login = ssh.get('permit_root_login', '')
+                if root_login:
+                    rl_style = 'bold red' if root_login.lower() in ('yes',) else 'green'
+                    t.add_row('Root-Login', Text(root_login, style=rl_style))
+                pw_auth = ssh.get('password_auth', '')
+                if pw_auth:
+                    pa_style = 'yellow' if pw_auth.lower() == 'yes' else 'green'
+                    t.add_row('Passwort-Auth', Text(pw_auth, style=pa_style))
+                if ssh.get('port', '') not in ('22', ''):
+                    t.add_row('SSH-Port', Text(ssh['port'], style='bold yellow'))
+                if ssh.get('allow_users'):
+                    t.add_row('AllowUsers', ssh['allow_users'])
+                if ssh.get('deny_users'):
+                    t.add_row('DenyUsers', Text(ssh['deny_users'], style='yellow'))
+
+            # Installierte Pakete
+            pkgs = profile.get('packages', {})
+            if pkgs.get('count', 0):
+                notable_str = ', '.join(pkgs.get('notable', [])[:6]) or '—'
+                t.add_row('Pakete', f"{pkgs['count']} installiert  |  notable: {notable_str}")
+
+            # Services
+            svcs = profile.get('services', {})
+            if svcs.get('enabled'):
+                t.add_row('Services aktiv', ', '.join(svcs['enabled'][:8]))
 
             users            = profile.get('users', [])
             notable_users    = profile.get('notable_users', [])
@@ -278,19 +312,26 @@ class PipelineUI:
                 login_allowed = [u['name'] for u in users if u.get('login_allowed')]
                 t.add_row('Nutzer gesamt',    f'{len(users)}  ({system_count} System, {regular_count} regulär)')
                 t.add_row('Login-berechtigt', ', '.join(login_allowed[:5]) or '—')
-                # Passwort + Erstellungszeit
-                pw_list = []
-                for u in users[:8]:
-                    icon = '✅' if u.get('has_password') else '❌'
-                    ct   = f' (erstellt: {u["created_at"]})' if u.get('created_at') else ''
-                    pw_list.append(f'{icon} {u["name"]}{ct}')
-                t.add_row('Passwort gesetzt', '  '.join(pw_list))
+                # Pro-User Details
+                for u in users[:10]:
+                    if u.get('is_system') and not u.get('is_unexpected'):
+                        continue  # System-User überspringen außer wenn verdächtig
+                    icon  = '✅' if u.get('has_password') else '❌'
+                    sudo  = ' 🔑sudo' if u.get('has_sudo') else ''
+                    ct    = f'  erstellt: {u["created_at"]}' if u.get('created_at') else ''
+                    ll    = f'  letzter Login: {u["last_login_time"]}' if u.get('last_login_time') else ''
+                    host  = f' von {u["last_login_host"]}' if u.get('last_login_host') else ''
+                    meth  = f'  [{", ".join(u.get("login_methods", []))}]' if u.get('login_methods') else ''
+                    hist  = f'  history: {",".join(u.get("shell_histories",[]))}' if u.get('shell_histories') else ''
+                    grps  = f'  gruppen: {",".join(u.get("groups",[])[:4])}' if u.get('groups') else ''
+                    detail = f'{ct}{ll}{host}{meth}{sudo}{hist}{grps}'
+                    style  = 'bold red' if u.get('is_unexpected') else ('bold yellow' if not u.get('is_system') else 'white')
+                    t.add_row(f'{icon} {u["name"]}', Text(detail.strip(), style=style))
+
                 # Unbekannte System-User (forensisch verdächtig)
                 if unexpected_users:
                     t.add_row('⚠️  Unbekannte Sys-User',
                               Text(', '.join(unexpected_users), style='bold red'))
-                for n in notable_users[:3]:
-                    t.add_row('⚠️  Auffällig', Text(n, style='bold yellow'))
             else:
                 t.add_row('Nutzer', Text('nicht vorhanden', style='dim'))
             sm = profile.get('shadow_mtime', '')

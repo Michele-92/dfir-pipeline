@@ -111,6 +111,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
     # ── Per-Partition Profiling ───────────────────────────────────────
     primary_offset = ctx.primary_partition.get('offset') if ctx.primary_partition else None
 
+    _primary_index = _index_partition(ctx.disk_image_path, primary_offset) if primary_offset else {}
     primary_profile = {
         'is_primary':       True,
         'partition_index':  ctx.primary_partition.get('index', '?') if ctx.primary_partition else '?',
@@ -130,9 +131,33 @@ def run(ctx: PipelineContext) -> PipelineContext:
         'unexpected_users': ctx.unexpected_users,
         'shadow_mtime':     ctx.shadow_mtime,
         'install_time':     _read_install_time(
-            ctx.disk_image_path, primary_offset or 0, {}, ctx.os_family
+            ctx.disk_image_path, primary_offset or 0, _primary_index, ctx.os_family
         ),
+        'sudo_users':     _read_sudo_rights(ctx.disk_image_path, primary_offset or 0, _primary_index),
+        'groups_map':     _read_group_memberships(ctx.disk_image_path, primary_offset or 0, _primary_index),
+        'packages':       _read_installed_packages(ctx.disk_image_path, primary_offset or 0, _primary_index, ctx.os_family),
+        'services':       _read_enabled_services(_primary_index),
+        'ssh_config':     _read_ssh_config(ctx.disk_image_path, primary_offset or 0, _primary_index),
+        'virtualization': _detect_virtualization(_primary_index),
     }
+    # Primäre User anreichern
+    _primary_last  = _read_last_logins(ctx.disk_image_path, primary_offset or 0, _primary_index)
+    _primary_meth  = _read_login_methods(ctx.disk_image_path, primary_offset or 0, _primary_index)
+    for u in primary_profile['users']:
+        uid_e = _primary_last.get(u['uid'], {})
+        u['last_login_time']  = uid_e.get('time', '')
+        u['last_login_host']  = uid_e.get('host', '')
+        u['login_methods']    = _primary_meth.get(u['name'], [])
+        u['groups']           = primary_profile['groups_map'].get(u['name'], [])
+        u['has_sudo']         = (u['name'] in primary_profile['sudo_users'] or
+                                 any(f'%{g}' in primary_profile['sudo_users']
+                                     for g in u.get('groups', [])))
+        home = u.get('home', '').lstrip('/')
+        u['shell_histories']  = [
+            h for h in ('bash', 'zsh', 'fish')
+            if f"{home}/.{h}_history" in _primary_index or
+               (u['name'] == 'root' and f"root/.{h}_history" in _primary_index)
+        ]
     partition_profiles = [primary_profile]
 
     secondary = sorted(
@@ -234,6 +259,249 @@ def _classify_os_family_from_content(content: str) -> str:
     return 'unknown'
 
 
+def _read_icat_binary(image_path: Path, offset: int, inode: str) -> bytes:
+    """Liest Datei-Inhalt als Bytes via icat — für Binärdateien (lastlog, wtmp)."""
+    icat_cmd = shutil.which('icat') or 'icat'
+    try:
+        res = subprocess.run(
+            [icat_cmd, '-o', str(offset), str(image_path), inode],
+            capture_output=True, timeout=15
+        )
+        if res.returncode == 0:
+            return res.stdout
+    except Exception:
+        pass
+    return b''
+
+
+def _read_last_logins(image_path: Path, offset: int, index: dict) -> dict:
+    """Liest letzten Login pro User aus /var/log/lastlog (binär, 292 Bytes/UID)."""
+    import struct
+    LASTLOG_SIZE   = 292
+    LASTLOG_STRUCT = struct.Struct('<l32s256s')
+    result = {}
+    if 'var/log/lastlog' not in index:
+        return result
+    data = _read_icat_binary(image_path, offset, index['var/log/lastlog'])
+    if not data:
+        return result
+    for uid in range(len(data) // LASTLOG_SIZE):
+        start = uid * LASTLOG_SIZE
+        chunk = data[start:start + LASTLOG_SIZE]
+        if len(chunk) < LASTLOG_SIZE:
+            break
+        try:
+            ts_sec, _, host = LASTLOG_STRUCT.unpack(chunk)
+            if ts_sec > 0:
+                from datetime import datetime
+                result[uid] = {
+                    'time': datetime.utcfromtimestamp(ts_sec).strftime('%Y-%m-%d %H:%M UTC'),
+                    'host': host.rstrip(b'\x00').decode('utf-8', errors='replace').strip(),
+                }
+        except Exception:
+            continue
+    return result
+
+
+def _read_login_methods(image_path: Path, offset: int, index: dict) -> dict:
+    """Erkennt Login-Methoden pro User aus wtmp (binary) + auth.log (text)."""
+    import struct, re
+    methods: dict = {}
+
+    # Quelle 1: wtmp — Session-Typ erkennen
+    WTMP_SIZE   = 388
+    WTMP_STRUCT = struct.Struct('<hh32s4s4shhiii4i20s')
+    for wtmp_path in ('var/log/wtmp',):
+        if wtmp_path not in index:
+            continue
+        data = _read_icat_binary(image_path, offset, index[wtmp_path])
+        for i in range(len(data) // WTMP_SIZE):
+            chunk = data[i * WTMP_SIZE:(i + 1) * WTMP_SIZE]
+            if len(chunk) < WTMP_SIZE:
+                break
+            try:
+                fields = WTMP_STRUCT.unpack(chunk)
+                ut_type = fields[0]
+                if ut_type != 7:  # USER_PROCESS
+                    continue
+                ut_user = fields[4].rstrip(b'\x00').decode('utf-8', errors='replace').strip()
+                ut_line = fields[2].rstrip(b'\x00').decode('utf-8', errors='replace').strip()
+                ut_host = fields[3].rstrip(b'\x00').decode('utf-8', errors='replace').strip()
+                if not ut_user:
+                    continue
+                s = methods.setdefault(ut_user, set())
+                if ut_host:
+                    s.add('ssh_remote')
+                elif ut_line.startswith('pts/'):
+                    s.add('ssh_local')
+                elif ut_line.startswith('tty'):
+                    s.add('console')
+            except Exception:
+                continue
+
+    # Quelle 2: auth.log — SSH-Methode (Key vs. Passwort)
+    for auth_path in ('var/log/auth.log', 'var/log/secure'):
+        if auth_path not in index:
+            continue
+        content = _read_icat(image_path, offset, index[auth_path])
+        for m in re.finditer(r'Accepted (password|publickey) for (\S+)', content):
+            method, user = m.group(1), m.group(2)
+            s = methods.setdefault(user, set())
+            s.add('ssh_key' if method == 'publickey' else 'ssh_password')
+        break
+
+    return {u: list(s) for u, s in methods.items()}
+
+
+def _read_sudo_rights(image_path: Path, offset: int, index: dict) -> list:
+    """Liest Sudo-Rechte aus /etc/sudoers und /etc/sudoers.d/*."""
+    import re
+    sudo_entries = []
+    files_to_check = [k for k in index if k == 'etc/sudoers' or k.startswith('etc/sudoers.d/')]
+    for path in files_to_check:
+        content = _read_icat(image_path, offset, index[path])
+        for line in content.splitlines():
+            line = line.strip()
+            if line.startswith('#') or not line:
+                continue
+            m = re.match(r'^(%?\S+)\s+ALL\s*=', line)
+            if m:
+                entry = m.group(1)
+                if entry not in sudo_entries:
+                    sudo_entries.append(entry)
+    return sudo_entries
+
+
+def _read_group_memberships(image_path: Path, offset: int, index: dict) -> dict:
+    """Liest Gruppenzugehörigkeit aus /etc/group."""
+    groups: dict = {}
+    if 'etc/group' not in index:
+        return groups
+    content = _read_icat(image_path, offset, index['etc/group'])
+    for line in content.splitlines():
+        parts = line.strip().split(':')
+        if len(parts) < 4:
+            continue
+        group_name  = parts[0]
+        members_str = parts[3]
+        if not members_str:
+            continue
+        for member in members_str.split(','):
+            member = member.strip()
+            if member:
+                groups.setdefault(member, []).append(group_name)
+    return groups
+
+
+def _read_installed_packages(image_path: Path, offset: int, index: dict, os_family: str) -> dict:
+    """Liest installierte Pakete — Debian: dpkg/status, Alpine: apk/db/installed."""
+    import re
+    NOTABLE_PKGS = {
+        'openssh-server', 'openssh-client', 'sudo', 'samba', 'smbclient',
+        'apache2', 'nginx', 'httpd', 'docker.io', 'docker-ce', 'containerd',
+        'nmap', 'netcat', 'nc', 'netcat-openbsd', 'curl', 'wget',
+        'python3', 'perl', 'ruby', 'php', 'nodejs',
+        'mysql-server', 'postgresql', 'mongodb', 'redis-server',
+        'ufw', 'iptables', 'fail2ban', 'auditd', 'rkhunter', 'chkrootkit',
+    }
+    result = {'count': 0, 'notable': [], 'source': ''}
+
+    # Debian/Ubuntu: /var/lib/dpkg/status
+    if os_family in ('debian',) and 'var/lib/dpkg/status' in index:
+        content = _read_icat(image_path, offset, index['var/lib/dpkg/status'])
+        packages = re.findall(
+            r'^Package: (.+)$.*?^Status: install ok installed',
+            content, re.MULTILINE | re.DOTALL
+        )
+        result['count']  = len(packages)
+        result['source'] = 'dpkg/status'
+        result['notable'] = [p for p in packages if p.lower() in NOTABLE_PKGS]
+
+    # Alpine: /lib/apk/db/installed
+    elif os_family == 'alpine':
+        for apk_path in ('lib/apk/db/installed', 'var/lib/apk/installed'):
+            if apk_path not in index:
+                continue
+            content = _read_icat(image_path, offset, index[apk_path])
+            packages = re.findall(r'^P:(.+)$', content, re.MULTILINE)
+            result['count']  = len(packages)
+            result['source'] = 'apk/db/installed'
+            result['notable'] = [p for p in packages if p.lower() in NOTABLE_PKGS]
+            break
+
+    return result
+
+
+def _read_enabled_services(index: dict) -> dict:
+    """Erkennt aktivierte systemd-Services aus *.wants/ Symlinks im Index."""
+    enabled   = set()
+    available = set()
+    for path in index:
+        # Aktivierte Services: in *.wants/ Verzeichnissen
+        if '.wants/' in path and path.endswith('.service'):
+            svc = path.split('/')[-1].replace('.service', '')
+            enabled.add(svc)
+        # Alle vorhandenen Services
+        elif (path.startswith('lib/systemd/system/') or
+              path.startswith('usr/lib/systemd/system/')) and path.endswith('.service'):
+            svc = path.split('/')[-1].replace('.service', '')
+            available.add(svc)
+    return {
+        'enabled':   sorted(enabled),
+        'available': sorted(available - enabled),
+    }
+
+
+def _read_ssh_config(image_path: Path, offset: int, index: dict) -> dict:
+    """Liest /etc/ssh/sshd_config und extrahiert forensisch relevante Direktiven."""
+    import re
+    cfg = {
+        'permit_root_login': '', 'password_auth': '', 'pubkey_auth': '',
+        'port': '22', 'allow_users': '', 'deny_users': '', 'max_auth_tries': '',
+    }
+    KEY_MAP = {
+        'permitrootlogin':        'permit_root_login',
+        'passwordauthentication': 'password_auth',
+        'pubkeyauthentication':   'pubkey_auth',
+        'port':                   'port',
+        'allowusers':             'allow_users',
+        'denyusers':              'deny_users',
+        'maxauthtries':           'max_auth_tries',
+    }
+    if 'etc/ssh/sshd_config' not in index:
+        return cfg
+    content = _read_icat(image_path, offset, index['etc/ssh/sshd_config'])
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        m = re.match(r'^(\S+)\s+(.+)$', line)
+        if m:
+            key = m.group(1).lower()
+            val = m.group(2).strip()
+            if key in KEY_MAP:
+                cfg[KEY_MAP[key]] = val
+    return cfg
+
+
+def _detect_virtualization(index: dict) -> str:
+    """Erkennt Virtualisierungs-/Container-Umgebung anhand von Datei-Indikatoren."""
+    VIRT_INDICATORS = {
+        'VMware':     ['usr/bin/vmtoolsd', 'etc/vmware-tools', 'usr/sbin/vmtoolsd'],
+        'VirtualBox': ['usr/bin/vboxclient', 'etc/vbox', 'usr/sbin/vboxadd'],
+        'KVM/QEMU':   ['usr/bin/qemu-ga', 'usr/sbin/qemu-ga'],
+        'Docker':     ['.dockerenv'],
+        'LXC':        ['etc/lxc', '.lxc'],
+        'AWS':        ['etc/cloud/cloud.cfg', 'usr/bin/aws', 'var/lib/cloud'],
+        'Azure':      ['etc/waagent.conf', 'usr/sbin/waagent'],
+        'GCP':        ['etc/google-cloud-ops-agent', 'usr/bin/google_osconfig_agent'],
+    }
+    for virt_type, indicators in VIRT_INDICATORS.items():
+        if any(ind in index for ind in indicators):
+            return virt_type
+    return 'Bare-Metal'
+
+
 def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
     """Liest vollständiges OS-Profil einer Partition direkt via TSK."""
     profile = {
@@ -241,6 +509,8 @@ def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
         'hostname': 'unknown', 'timezone': 'UTC', 'timezone_display': 'UTC',
         'kernel_version': '', 'machine_id': '', 'install_time': '',
         'users': [], 'notable_users': [], 'unexpected_users': [],
+        'sudo_users': [], 'groups_map': {}, 'packages': {},
+        'services': {}, 'ssh_config': {}, 'virtualization': '',
     }
     index = _index_partition(image_path, offset)
     if not index:
@@ -306,6 +576,36 @@ def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
 
     # OS-Installationszeitpunkt
     profile['install_time'] = _read_install_time(image_path, offset, index, profile['os_family'])
+
+    # ── Erweiterte Profiling-Features ────────────────────────────────────
+    last_logins   = _read_last_logins(image_path, offset, index)
+    login_methods = _read_login_methods(image_path, offset, index)
+    sudo_list     = _read_sudo_rights(image_path, offset, index)
+    groups_map    = _read_group_memberships(image_path, offset, index)
+
+    profile['sudo_users']    = sudo_list
+    profile['groups_map']    = groups_map
+    profile['packages']      = _read_installed_packages(image_path, offset, index, profile['os_family'])
+    profile['services']      = _read_enabled_services(index)
+    profile['ssh_config']    = _read_ssh_config(image_path, offset, index)
+    profile['virtualization']= _detect_virtualization(index)
+
+    # User-Dicts anreichern
+    for u in profile['users']:
+        uid_entry         = last_logins.get(u['uid'], {})
+        u['last_login_time'] = uid_entry.get('time', '')
+        u['last_login_host'] = uid_entry.get('host', '')
+        u['login_methods']   = login_methods.get(u['name'], [])
+        u['groups']          = groups_map.get(u['name'], [])
+        u['has_sudo']        = (u['name'] in sudo_list or
+                                any(f'%{g}' in sudo_list for g in u.get('groups', [])))
+        home = u.get('home', '').lstrip('/')
+        name = u['name']
+        u['shell_histories'] = [
+            h for h in ('bash', 'zsh', 'fish')
+            if f"{home}/.{h}_history" in index or
+               (name == 'root' and f"root/.{h}_history" in index)
+        ]
 
     return profile
 
