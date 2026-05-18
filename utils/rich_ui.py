@@ -258,6 +258,8 @@ class PipelineUI:
             t.add_row('Betriebssystem', profile.get('os_name')       or 'Unbekannt')
             t.add_row('OS-Familie',     profile.get('os_family')     or 'Unbekannt')
             t.add_row('Kernel',         profile.get('kernel_version') or 'Unbekannt')
+            install_time = profile.get('install_time', '')
+            t.add_row('Installiert am', install_time if install_time else Text('nicht bestimmbar', style='dim'))
             t.add_row('Hostname',       profile.get('hostname')       or 'Unbekannt')
             tz = profile.get('timezone_display') or profile.get('timezone') or 'UTC'
             t.add_row('Zeitzone', tz)
@@ -266,8 +268,9 @@ class PipelineUI:
             ips = profile.get('ip_addresses', [])
             t.add_row('IP-Adressen', ', '.join(ips[:5]) if ips else Text('nicht vorhanden', style='dim'))
 
-            users         = profile.get('users', [])
-            notable_users = profile.get('notable_users', [])
+            users            = profile.get('users', [])
+            notable_users    = profile.get('notable_users', [])
+            unexpected_users = profile.get('unexpected_users', [])
             t.add_row('─── Nutzer-Profil ───', '')
             if users:
                 system_count  = sum(1 for u in users if u.get('is_system'))
@@ -275,8 +278,17 @@ class PipelineUI:
                 login_allowed = [u['name'] for u in users if u.get('login_allowed')]
                 t.add_row('Nutzer gesamt',    f'{len(users)}  ({system_count} System, {regular_count} regulär)')
                 t.add_row('Login-berechtigt', ', '.join(login_allowed[:5]) or '—')
-                pw_list = [('✅' if u.get('has_password') else '❌') + f' {u["name"]}' for u in users[:8]]
+                # Passwort + Erstellungszeit
+                pw_list = []
+                for u in users[:8]:
+                    icon = '✅' if u.get('has_password') else '❌'
+                    ct   = f' (erstellt: {u["created_at"]})' if u.get('created_at') else ''
+                    pw_list.append(f'{icon} {u["name"]}{ct}')
                 t.add_row('Passwort gesetzt', '  '.join(pw_list))
+                # Unbekannte System-User (forensisch verdächtig)
+                if unexpected_users:
+                    t.add_row('⚠️  Unbekannte Sys-User',
+                              Text(', '.join(unexpected_users), style='bold red'))
                 for n in notable_users[:3]:
                     t.add_row('⚠️  Auffällig', Text(n, style='bold yellow'))
             else:

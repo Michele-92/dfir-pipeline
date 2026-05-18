@@ -49,6 +49,35 @@ OS_PROFILES = {
 }
 
 
+KNOWN_SYSTEM_USERS = {
+    'debian': {
+        'root','daemon','bin','sys','sync','games','man','lp','mail','news','uucp',
+        'proxy','www-data','backup','list','irc','gnats','nobody','systemd-network',
+        'systemd-resolve','systemd-timesync','messagebus','syslog','_apt','tss',
+        'uuidd','tcpdump','landscape','pollinate','sshd','postfix','avahi',
+        'cups-pk-helper','rtkit','dnsmasq','colord','gdm','pulse',
+    },
+    'rhel': {
+        'root','bin','daemon','adm','lp','sync','shutdown','halt','mail','operator',
+        'games','ftp','nobody','dbus','polkitd','rpc','rpcuser','nfsnobody','sshd',
+        'postfix','chrony','systemd-network','systemd-bus-proxy','tss','sssd',
+        'unbound','gluster','saslauth','rpcbind',
+    },
+    'alpine': {
+        'root','bin','daemon','adm','lp','sync','shutdown','halt','mail','news',
+        'uucp','operator','man','postmaster','cron','ftp','sshd','at','squid',
+        'xfs','games','cyrus','vpopmail','ntp','smmsp','guest','nobody',
+        'apache','nginx','postgres','mysql','redis',
+    },
+    'arch': {
+        'root','bin','daemon','mail','ftp','http','uuidd','dbus','nobody',
+        'systemd-journal-remote','systemd-network','systemd-resolve',
+        'systemd-timesync','systemd-coredump','polkitd','rtkit','avahi',
+        'colord','gdm','sddm','lightdm',
+    },
+}
+
+
 def run(ctx: PipelineContext) -> PipelineContext:
     log.info('Stage 3: System-Profiling')
     os_release = _read_os_release(ctx.disk_image_path)
@@ -76,7 +105,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
     ctx.network_config= _read_field(ctx.disk_image_path, 'interfaces')
 
     # User-Profiling
-    ctx.users, ctx.shadow_mtime, ctx.notable_users = _profile_users(ctx.disk_image_path)
+    ctx.users, ctx.shadow_mtime, ctx.notable_users, ctx.unexpected_users = \
+        _profile_users(ctx.disk_image_path, ctx.os_family)
 
     # ── Per-Partition Profiling ───────────────────────────────────────
     primary_offset = ctx.primary_partition.get('offset') if ctx.primary_partition else None
@@ -97,7 +127,9 @@ def run(ctx: PipelineContext) -> PipelineContext:
         'ip_addresses':     ctx.ip_addresses,
         'users':            ctx.users,
         'notable_users':    ctx.notable_users,
+        'unexpected_users': ctx.unexpected_users,
         'shadow_mtime':     ctx.shadow_mtime,
+        'install_time':     '',
     }
     partition_profiles = [primary_profile]
 
@@ -205,7 +237,8 @@ def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
     profile = {
         'os_name': '', 'os_family': 'unknown',
         'hostname': 'unknown', 'timezone': 'UTC', 'timezone_display': 'UTC',
-        'kernel_version': '', 'machine_id': '', 'users': [], 'notable_users': [],
+        'kernel_version': '', 'machine_id': '', 'install_time': '',
+        'users': [], 'notable_users': [], 'unexpected_users': [],
     }
     index = _index_partition(image_path, offset)
     if not index:
@@ -251,10 +284,17 @@ def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
     if 'etc/passwd' in index:
         raw = _read_icat(image_path, offset, index['etc/passwd'])
         if raw:
-            profile['users'] = _parse_users(raw)
+            profile['users'] = _parse_users(raw, profile['os_family'])
+            # User-Erstellungszeiten aus auth.log/secure anreichern
+            creation_times = _read_user_creation_times(image_path, offset, index)
+            for u in profile['users']:
+                u['created_at'] = creation_times.get(u['name'], '')
             profile['notable_users'] = [
                 u['name'] for u in profile['users']
                 if not u.get('is_system', True) and u.get('login_allowed', False)
+            ]
+            profile['unexpected_users'] = [
+                u['name'] for u in profile['users'] if u.get('is_unexpected', False)
             ]
 
     # /etc/shadow mtime via istat
@@ -262,7 +302,70 @@ def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
     if 'etc/shadow' in index:
         profile['shadow_mtime'] = _read_shadow_mtime_tsk(image_path, offset, index['etc/shadow'])
 
+    # OS-Installationszeitpunkt
+    profile['install_time'] = _read_install_time(image_path, offset, index, profile['os_family'])
+
     return profile
+
+
+def _read_install_time(image_path: Path, offset: int, index: dict, os_family: str = '') -> str:
+    """Schätzt OS-Installationszeitpunkt — 3 Quellen, erste erfolgreiche gewinnt."""
+    import re
+
+    # Quelle 1: Installer-Logs (zuverlässigste)
+    installer_paths = {
+        'debian': ['var/log/installer/syslog'],
+        'rhel':   ['var/log/anaconda/syslog', 'var/log/anaconda/program.log'],
+    }
+    for log_path in installer_paths.get(os_family, []):
+        if log_path in index:
+            content = _read_icat(image_path, offset, index[log_path])
+            if content:
+                for line in content.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    m = re.search(r'(\d{4}-\d{2}-\d{2}[T\s][\d:]+)', line)
+                    if m:
+                        return m.group(1).replace('T', ' ')
+                    break
+
+    # Quelle 2: istat auf /etc/machine-id (generiert beim ersten Boot)
+    if 'etc/machine-id' in index:
+        mtime = _read_shadow_mtime_tsk(image_path, offset, index['etc/machine-id'])
+        if mtime:
+            return mtime
+
+    # Quelle 3: istat auf /etc/hostname
+    if 'etc/hostname' in index:
+        mtime = _read_shadow_mtime_tsk(image_path, offset, index['etc/hostname'])
+        if mtime:
+            return mtime
+
+    return ''
+
+
+def _read_user_creation_times(image_path: Path, offset: int, index: dict) -> dict:
+    """Liest User-Erstellungszeiten aus auth.log oder secure via TSK."""
+    import re
+    creation_times = {}
+    for log_path in ('var/log/auth.log', 'var/log/secure'):
+        if log_path not in index:
+            continue
+        content = _read_icat(image_path, offset, index[log_path])
+        if not content:
+            continue
+        pattern = re.compile(
+            r'(\w+\s+\d+\s+[\d:]+).*?(?:new user:\s*name=(\S+)|useradd.*?user\s+(\S+))',
+            re.IGNORECASE
+        )
+        for m in pattern.finditer(content):
+            ts   = m.group(1).strip()
+            name = (m.group(2) or m.group(3) or '').rstrip(',')
+            if name and name not in creation_times:
+                creation_times[name] = ts
+        break
+    return creation_times
 
 
 def _read_os_release(image_path) -> str:
@@ -427,10 +530,10 @@ def _read_ip_addresses(image_path) -> List[str]:
     return ips[:10]  # max 10 IPs
 
 
-def _profile_users(image_path) -> tuple[list, str, list]:
+def _profile_users(image_path, os_family: str = '') -> tuple[list, str, list, list]:
     """Liest Nutzer-Profil via target-query."""
     if image_path is None:
-        return [], '', []
+        return [], '', [], []
     users = []
     shadow_mtime = ''
     try:
@@ -439,7 +542,7 @@ def _profile_users(image_path) -> tuple[list, str, list]:
             capture_output=True, text=True, timeout=30
         )
         raw = result.stdout.strip()
-        users = _parse_users(raw)
+        users = _parse_users(raw, os_family)
     except Exception as e:
         log.debug(f'target-query users fehlgeschlagen: {e}')
 
@@ -452,32 +555,39 @@ def _profile_users(image_path) -> tuple[list, str, list]:
     except Exception:
         pass
 
-    notable = [u['name'] for u in users
-               if not u.get('is_system', True) and u.get('login_allowed', False)]
-    return users, shadow_mtime, notable
+    notable     = [u['name'] for u in users
+                   if not u.get('is_system', True) and u.get('login_allowed', False)]
+    unexpected  = [u['name'] for u in users if u.get('is_unexpected', False)]
+    return users, shadow_mtime, notable, unexpected
 
 
-def _parse_users(raw: str) -> list:
-    """Parst target-query users Output."""
+def _parse_users(raw: str, os_family: str = '') -> list:
+    """Parst /etc/passwd oder target-query users Output."""
+    known = KNOWN_SYSTEM_USERS.get(os_family, set())
     users = []
     for line in raw.splitlines():
         line = line.strip()
         if not line or line.startswith('<Target') or line.startswith('#'):
             continue
-        # Format variiert je nach dissect-Version — robust parsen
         parts = line.split(':')
         if len(parts) >= 7:
             try:
-                uid = int(parts[2]) if parts[2].isdigit() else -1
+                uid  = int(parts[2]) if parts[2].isdigit() else -1
+                name = parts[0]
+                is_system    = uid < 1000 and uid >= 0
+                is_known_sys = name in known if known else is_system
                 users.append({
-                    'name':          parts[0],
-                    'uid':           uid,
-                    'gid':           int(parts[3]) if parts[3].isdigit() else -1,
-                    'home':          parts[5] if len(parts) > 5 else '',
-                    'shell':         parts[6].strip() if len(parts) > 6 else '',
-                    'login_allowed': parts[6].strip() not in ('/bin/false', '/usr/sbin/nologin', '') if len(parts) > 6 else False,
-                    'is_system':     uid < 1000 and uid >= 0,
-                    'has_password':  parts[1] not in ('', 'x', '*', '!') if len(parts) > 1 else False,
+                    'name':            name,
+                    'uid':             uid,
+                    'gid':             int(parts[3]) if parts[3].isdigit() else -1,
+                    'home':            parts[5] if len(parts) > 5 else '',
+                    'shell':           parts[6].strip() if len(parts) > 6 else '',
+                    'login_allowed':   parts[6].strip() not in ('/bin/false', '/usr/sbin/nologin', '') if len(parts) > 6 else False,
+                    'is_system':       is_system,
+                    'is_known_system': is_known_sys,
+                    'is_unexpected':   is_system and not is_known_sys and uid > 0,
+                    'has_password':    parts[1] not in ('', 'x', '*', '!') if len(parts) > 1 else False,
+                    'created_at':      '',
                 })
             except (ValueError, IndexError):
                 continue

@@ -12,6 +12,10 @@ class CoCEntry:
 
 @dataclass
 class ChainOfCustody:
+    """Pipeline-Ausführungsprotokoll — dokumentiert alle Analyse-Schritte.
+    Hinweis: Dies ist ein Teil der übergeordneten forensischen Chain of Custody,
+    nicht die CoC selbst. Die CoC umfasst alle Maßnahmen vor, während und nach
+    der Pipeline-Ausführung."""
     file_name:  str
     sha256:     str
     md5:        str

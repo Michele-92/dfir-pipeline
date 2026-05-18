@@ -170,45 +170,106 @@ def _write_antiforensics_json(ctx: PipelineContext, case_dir: Path) -> None:
 
 # ── Activity CSV (Logins, Reboots, Crashes) ──────────────────────────────────
 
-ACTIVITY_KEYWORDS = {
-    'REBOOT': ['reboot', 'shutdown', 'started up', 'system boot', 'kernel command line',
-               'systemd: starting', 'reached target basic system'],
-    'LOGIN':  ['session opened', 'accepted password', 'accepted publickey',
-               'new session', 'logged in', 'pam_unix.*session'],
-    'CRASH':  ['kernel panic', 'oom killer', 'segfault', 'out of memory',
-               'killed process', 'call trace'],
-}
+# Schicht 1: Strukturierte Event-Types aus Parsern (primär, zuverlässig)
+_REBOOT_EVENT_TYPES = {'boot', 'system_boot', 'reboot', 'shutdown', 'system_shutdown',
+                       'service_start', 'kernel_start'}
+_LOGIN_EVENT_TYPES  = {'ssh_login_success', 'ssh_login_fail', 'ssh_invalid_user',
+                       'sudo_command', 'user_login', 'console_login', 'su_session',
+                       'pam_session', 'auth_success', 'auth_failure'}
+_CRASH_EVENT_TYPES  = {'kernel_panic', 'oom_kill', 'segfault', 'service_crash',
+                       'kernel_error', 'oom_killer'}
+
+# Schicht 2: Keyword-Fallback für generische Events (nur HIGH/CRITICAL)
+_REBOOT_KEYWORDS = ['system boot', 'kernel command line', 'reached target basic system',
+                    'systemd: starting', 'reboot', 'shutdown']
+_LOGIN_KEYWORDS  = ['session opened', 'accepted password', 'accepted publickey',
+                    'new session', 'logged in']
+_CRASH_KEYWORDS  = ['kernel panic', 'oom killer', 'segfault', 'out of memory',
+                    'killed process', 'call trace']
+
+
+def _classify_event(event) -> str | None:
+    """Klassifiziert Event als REBOOT/LOGIN/CRASH — strukturiert zuerst, Keyword-Fallback."""
+    et = (event.event_type or '').lower()
+    if et in _REBOOT_EVENT_TYPES: return 'REBOOT'
+    if et in _LOGIN_EVENT_TYPES:  return 'LOGIN'
+    if et in _CRASH_EVENT_TYPES:  return 'CRASH'
+    # Keyword-Fallback nur für HIGH/CRITICAL Events
+    if getattr(event, 'severity', '') in ('high', 'critical', 'error'):
+        msg = event.message.lower()
+        if any(kw in msg for kw in _CRASH_KEYWORDS):  return 'CRASH'
+        if any(kw in msg for kw in _REBOOT_KEYWORDS): return 'REBOOT'
+    # Keyword-Fallback für alle Severity bei Login/Reboot
+    msg = event.message.lower()
+    if any(kw in msg for kw in _LOGIN_KEYWORDS):  return 'LOGIN'
+    if any(kw in msg for kw in _REBOOT_KEYWORDS): return 'REBOOT'
+    return None
 
 
 def _write_activity_csv(ctx: PipelineContext, case_dir: Path) -> None:
-    """Exportiert Logins, Reboots und Crashes als CSV-Timeline."""
+    """Exportiert Logins, Reboots und Crashes — kombiniert + 3 separate CSVs."""
     if not ctx.events_db_path or not ctx.events_db_path.exists():
-        log.warning('  activity_timeline.csv: keine events.db vorhanden')
+        log.warning('  activity CSVs: keine events.db vorhanden')
         return
     from utils.event_store import EventStore
     relevant = []
     with EventStore(ctx.events_db_path) as store:
         for event in store.iter_events():
-            msg_lower = event.message.lower()
-            for event_type, keywords in ACTIVITY_KEYWORDS.items():
-                if any(kw in msg_lower for kw in keywords):
-                    relevant.append((event, event_type))
-                    break
+            classified = _classify_event(event)
+            if classified:
+                relevant.append((event, classified))
 
+    relevant.sort(key=lambda x: x[0].timestamp)
+
+    # Kombinierte Timeline
     out = case_dir / 'activity_timeline.csv'
     with open(out, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(['Timestamp_UTC', 'Event_Type', 'User', 'IP', 'Source', 'Details'])
-        for event, event_type in sorted(relevant, key=lambda x: x[0].timestamp):
-            writer.writerow([
-                event.timestamp.isoformat(),
-                event_type,
-                event.user  or '',
-                event.ip    or '',
-                event.source,
-                event.message[:300],
-            ])
-    log.info(f'  activity_timeline.csv → {out}  ({len(relevant)} Einträge)')
+        for event, et in relevant:
+            writer.writerow([event.timestamp.isoformat(), et,
+                             event.user or '', event.ip or '',
+                             event.source, event.message[:300]])
+
+    # 3 separate CSVs
+    _write_event_csvs(relevant, case_dir)
+    log.info(f'  activity_timeline.csv + 3 separate CSVs → {case_dir}  ({len(relevant)} Einträge)')
+
+
+def _write_event_csvs(relevant: list, case_dir: Path) -> None:
+    """Schreibt system_reboots.csv, login_events.csv, system_crashes.csv."""
+    configs = {
+        'REBOOT': ('system_reboots.csv',
+                   ['Timestamp_UTC', 'Source', 'Details']),
+        'LOGIN':  ('login_events.csv',
+                   ['Timestamp_UTC', 'User', 'IP', 'Method', 'Source', 'Details']),
+        'CRASH':  ('system_crashes.csv',
+                   ['Timestamp_UTC', 'Severity', 'Source', 'Details']),
+    }
+    handles = {}
+    writers = {}
+    for et, (fname, header) in configs.items():
+        f = open(case_dir / fname, 'w', newline='', encoding='utf-8')
+        handles[et] = f
+        writers[et] = csv.writer(f)
+        writers[et].writerow(header)
+
+    for event, et in relevant:
+        if et == 'REBOOT':
+            writers['REBOOT'].writerow([event.timestamp.isoformat(),
+                                        event.source, event.message[:200]])
+        elif et == 'LOGIN':
+            method = event.event_type or ''
+            writers['LOGIN'].writerow([event.timestamp.isoformat(),
+                                       event.user or '', event.ip or '',
+                                       method, event.source, event.message[:200]])
+        elif et == 'CRASH':
+            sev = getattr(event, 'severity', '')
+            writers['CRASH'].writerow([event.timestamp.isoformat(),
+                                       sev, event.source, event.message[:200]])
+
+    for f in handles.values():
+        f.close()
 
 
 # ── MACtime CSV-Paket ────────────────────────────────────────────────────────
@@ -540,8 +601,9 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     story.append(_table(stage_rows, [35*mm, 40*mm, 95*mm]))
     story.append(PageBreak())
 
-    # ── Seite 8: Chain of Custody ────────────────────────────────────────────
-    story.append(_h1('Chain of Custody'))
+    # ── Seite 8: Pipeline-Ausführungsprotokoll ───────────────────────────────
+    story.append(_h1('Pipeline-Ausführungsprotokoll'))
+    story.append(_para('(Teil der forensischen Chain of Custody)', 'Italic'))
     story.append(_spacer(4))
     coc = ctx.coc
     if coc:
