@@ -260,6 +260,9 @@ class PipelineUI:
             t.add_row('Kernel',         profile.get('kernel_version') or 'Unbekannt')
             install_time = profile.get('install_time', '')
             t.add_row('Installiert am', install_time if install_time else Text('nicht bestimmbar', style='dim'))
+            usage = profile.get('usage_period', {})
+            t.add_row('Erste Aktivität', usage.get('first_activity') or Text('nicht bestimmbar', style='dim'))
+            t.add_row('Letzte Aktivität', usage.get('last_activity') or Text('nicht bestimmbar', style='dim'))
             t.add_row('Hostname',       profile.get('hostname')       or 'Unbekannt')
             tz = profile.get('timezone_display') or profile.get('timezone') or 'UTC'
             t.add_row('Zeitzone', tz)
@@ -267,6 +270,23 @@ class PipelineUI:
             t.add_row('Machine-ID',  mid[:32] + ('...' if len(mid) > 32 else '') if mid else Text('nicht vorhanden', style='dim'))
             ips = profile.get('ip_addresses', [])
             t.add_row('IP-Adressen', ', '.join(ips[:5]) if ips else Text('nicht vorhanden', style='dim'))
+
+            # Strukturierte Netzwerkkonfiguration
+            net = profile.get('net_config', {})
+            if net:
+                t.add_row('─── Netzwerkkonfiguration ───', '')
+                if net.get('interfaces'):
+                    t.add_row('Interfaces',   ', '.join(net['interfaces'][:6]))
+                if net.get('dns_servers'):
+                    t.add_row('DNS-Server',   ', '.join(net['dns_servers'][:4]))
+                if net.get('search_domains'):
+                    t.add_row('Suchdomänen',  ', '.join(net['search_domains'][:3]))
+                if net.get('gateway'):
+                    t.add_row('Gateway',      net['gateway'])
+                if net.get('mac_hints'):
+                    t.add_row('MAC-Hinweise', ', '.join(net['mac_hints'][:3]) +
+                              Text('  (aus DHCP/NM)', style='dim').plain if net['mac_hints'] else '')
+
             virt = profile.get('virtualization', '')
             if virt:
                 virt_style = 'dim' if virt == 'Bare-Metal' else 'cyan'

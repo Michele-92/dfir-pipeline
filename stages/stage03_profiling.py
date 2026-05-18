@@ -139,6 +139,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
         'services':       _read_enabled_services(_primary_index),
         'ssh_config':     _read_ssh_config(ctx.disk_image_path, primary_offset or 0, _primary_index),
         'virtualization': _detect_virtualization(_primary_index),
+        'usage_period':   _read_usage_period(ctx.disk_image_path, primary_offset or 0, _primary_index, ctx.os_family),
+        'net_config':     _read_network_config_structured(ctx.disk_image_path, primary_offset or 0, _primary_index, ctx.os_family),
     }
     # Primäre User anreichern
     _primary_last  = _read_last_logins(ctx.disk_image_path, primary_offset or 0, _primary_index)
@@ -589,6 +591,8 @@ def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
     profile['services']      = _read_enabled_services(index)
     profile['ssh_config']    = _read_ssh_config(image_path, offset, index)
     profile['virtualization']= _detect_virtualization(index)
+    profile['usage_period']  = _read_usage_period(image_path, offset, index, profile['os_family'])
+    profile['net_config']    = _read_network_config_structured(image_path, offset, index, profile['os_family'])
 
     # User-Dicts anreichern
     for u in profile['users']:
@@ -608,6 +612,171 @@ def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
         ]
 
     return profile
+
+
+def _read_usage_period(image_path: Path, offset: int, index: dict, os_family: str = '') -> dict:
+    """Ermittelt Nutzungszeitraum: erste + letzte bekannte Aktivität via Log-Dateien."""
+    import re
+    from datetime import datetime
+
+    # Log-Quellen je OS-Familie (inkl. rotierte Logs für ältere Einträge)
+    LOG_CANDIDATES = {
+        'debian': ['var/log/syslog.1', 'var/log/syslog',
+                   'var/log/auth.log.1', 'var/log/auth.log'],
+        'rhel':   ['var/log/messages-*', 'var/log/messages', 'var/log/secure'],
+        'alpine': ['var/log/messages', 'var/log/auth.log'],
+        'arch':   ['var/log/pacman.log'],
+    }
+    TS_PATTERNS = [
+        re.compile(r'(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})'),          # ISO
+        re.compile(r'(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})'),             # syslog
+    ]
+    candidates = LOG_CANDIDATES.get(os_family, ['var/log/syslog', 'var/log/messages'])
+    # Auch wildcard-artige Muster im Index matchen (z.B. messages-20240101)
+    expanded = []
+    for cand in candidates:
+        if '*' in cand:
+            prefix = cand.replace('*', '')
+            expanded += [k for k in index if k.startswith(prefix)]
+        elif cand in index:
+            expanded.append(cand)
+
+    result = {'first_activity': '', 'last_activity': '', 'source': ''}
+    all_first: list = []
+
+    for log_path in expanded:
+        if log_path not in index:
+            continue
+        # Erste Aktivität: nur Anfang der Datei lesen
+        content_start = _read_icat(image_path, offset, index[log_path])
+        if not content_start:
+            continue
+        # Ersten Zeitstempel aus den ersten Zeilen extrahieren
+        for line in content_start.splitlines()[:50]:
+            for pat in TS_PATTERNS:
+                m = pat.search(line)
+                if m:
+                    all_first.append((m.group(1), log_path))
+                    break
+            else:
+                continue
+            break
+        # Letzte Aktivität: mtime via istat (append-only → mtime = letzter Eintrag)
+        mtime = _read_shadow_mtime_tsk(image_path, offset, index[log_path])
+        if mtime and (not result['last_activity'] or mtime > result['last_activity']):
+            result['last_activity'] = mtime
+
+    if all_first:
+        # Minimum = frühester bekannter Log-Eintrag
+        all_first.sort(key=lambda x: x[0])
+        result['first_activity'] = all_first[0][0]
+        result['source']         = all_first[0][1]
+
+    return result
+
+
+def _read_network_config_structured(image_path: Path, offset: int,
+                                    index: dict, os_family: str = '') -> dict:
+    """Liest strukturierte Netzwerkkonfiguration: DNS, Gateway, Interfaces, MAC."""
+    import re
+    net = {
+        'interfaces':     [],
+        'dns_servers':    [],
+        'search_domains': [],
+        'gateway':        '',
+        'mac_hints':      [],
+        'source':         '',
+    }
+
+    # ── DNS aus /etc/resolv.conf ─────────────────────────────────────────
+    if 'etc/resolv.conf' in index:
+        content = _read_icat(image_path, offset, index['etc/resolv.conf'])
+        net['dns_servers']    = re.findall(r'^nameserver\s+([\d.:a-fA-F]+)',
+                                           content, re.MULTILINE)
+        search = re.findall(r'^search\s+(.+)', content, re.MULTILINE)
+        if search:
+            net['search_domains'] = search[0].split()
+
+    # ── Debian / Alpine: /etc/network/interfaces ──────────────────────────
+    if os_family in ('debian', 'alpine') and 'etc/network/interfaces' in index:
+        content = _read_icat(image_path, offset, index['etc/network/interfaces'])
+        net['interfaces'] = re.findall(r'^iface\s+(\S+)\s+inet', content, re.MULTILINE)
+        gw = re.search(r'^\s+gateway\s+([\d.]+)', content, re.MULTILINE)
+        if gw:
+            net['gateway'] = gw.group(1)
+        net['source'] = 'etc/network/interfaces'
+
+    # ── Ubuntu / Netplan: /etc/netplan/*.yaml ────────────────────────────
+    netplan_files = [k for k in index if k.startswith('etc/netplan/') and k.endswith('.yaml')]
+    if netplan_files:
+        for nf in netplan_files:
+            content = _read_icat(image_path, offset, index[nf])
+            if not content:
+                continue
+            # YAML-Parser versuchen, Regex-Fallback
+            try:
+                import yaml
+                data = yaml.safe_load(content) or {}
+                ethernets = (data.get('network', {}) or {}).get('ethernets', {}) or {}
+                for iface, cfg in ethernets.items():
+                    if iface not in net['interfaces']:
+                        net['interfaces'].append(iface)
+                    cfg = cfg or {}
+                    gw = cfg.get('gateway4') or cfg.get('gateway6', '')
+                    if gw and not net['gateway']:
+                        net['gateway'] = str(gw)
+            except Exception:
+                # Regex-Fallback
+                gw = re.search(r'gateway4:\s*([\d.]+)', content)
+                if gw and not net['gateway']:
+                    net['gateway'] = gw.group(1)
+                ifaces = re.findall(r'^\s{4}(\w[\w-]+):\s*$', content, re.MULTILINE)
+                net['interfaces'] += [i for i in ifaces if i not in net['interfaces']]
+        if netplan_files:
+            net['source'] = netplan_files[0]
+
+    # ── RHEL: /etc/sysconfig/network-scripts/ifcfg-* ─────────────────────
+    if os_family == 'rhel':
+        ifcfg_files = [k for k in index
+                       if k.startswith('etc/sysconfig/network-scripts/ifcfg-')]
+        for ifcfg in ifcfg_files:
+            content = _read_icat(image_path, offset, index[ifcfg])
+            dev = re.search(r'^DEVICE=(.+)', content, re.MULTILINE)
+            gw  = re.search(r'^GATEWAY=(.+)', content, re.MULTILINE)
+            if dev:
+                name = dev.group(1).strip().strip('"')
+                if name not in net['interfaces']:
+                    net['interfaces'].append(name)
+            if gw and not net['gateway']:
+                net['gateway'] = gw.group(1).strip().strip('"')
+        if ifcfg_files:
+            net['source'] = 'etc/sysconfig/network-scripts'
+
+    # ── MAC-Adressen — 3 Quellen ─────────────────────────────────────────
+    # Quelle 1: DHCP-Lease
+    for lease_path in ('var/lib/dhcp/dhclient.leases', 'var/lib/dhcpcd/dhcpcd.leases'):
+        if lease_path in index:
+            content = _read_icat(image_path, offset, index[lease_path])
+            macs = re.findall(r'hardware ethernet\s+([\da-fA-F:]{17})', content)
+            net['mac_hints'] += [m for m in macs if m not in net['mac_hints']]
+
+    # Quelle 2: NetworkManager Verbindungsprofile
+    nm_files = [k for k in index
+                if 'networkmanager/system-connections' in k and k.endswith('.nmconnection')]
+    for nm in nm_files:
+        content = _read_icat(image_path, offset, index[nm])
+        m = re.search(r'mac-address=([\da-fA-F:]{17})', content, re.IGNORECASE)
+        if m and m.group(1) not in net['mac_hints']:
+            net['mac_hints'].append(m.group(1))
+
+    # Quelle 3: udev Persistent-Net-Rules
+    udev_path = 'etc/udev/rules.d/70-persistent-net.rules'
+    if udev_path in index:
+        content = _read_icat(image_path, offset, index[udev_path])
+        macs = re.findall(r'ATTR\{address\}=="([\da-fA-F:]{17})"', content)
+        net['mac_hints'] += [m for m in macs if m not in net['mac_hints']]
+
+    return net
 
 
 def _read_install_time(image_path: Path, offset: int, index: dict, os_family: str = '') -> str:
