@@ -284,8 +284,7 @@ class PipelineUI:
                 if net.get('gateway'):
                     t.add_row('Gateway',      net['gateway'])
                 if net.get('mac_hints'):
-                    t.add_row('MAC-Hinweise', ', '.join(net['mac_hints'][:3]) +
-                              Text('  (aus DHCP/NM)', style='dim').plain if net['mac_hints'] else '')
+                    t.add_row('MAC-Hinweise', ', '.join(net['mac_hints'][:3]) + '  (aus DHCP/NM)')
 
             virt = profile.get('virtualization', '')
             if virt:

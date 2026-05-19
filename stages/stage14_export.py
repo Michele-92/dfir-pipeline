@@ -4,6 +4,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from models.pipeline_context import PipelineContext
 from stages.stage13_quality import evaluate_quality
@@ -188,7 +189,7 @@ _CRASH_KEYWORDS  = ['kernel panic', 'oom killer', 'segfault', 'out of memory',
                     'killed process', 'call trace']
 
 
-def _classify_event(event) -> str | None:
+def _classify_event(event) -> Optional[str]:
     """Klassifiziert Event als REBOOT/LOGIN/CRASH — strukturiert zuerst, Keyword-Fallback."""
     et = (event.event_type or '').lower()
     if et in _REBOOT_EVENT_TYPES: return 'REBOOT'

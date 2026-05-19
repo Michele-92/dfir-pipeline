@@ -1,9 +1,11 @@
 import logging
+import re
 import shutil
+import struct
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 from models.pipeline_context import PipelineContext
 
@@ -278,7 +280,6 @@ def _read_icat_binary(image_path: Path, offset: int, inode: str) -> bytes:
 
 def _read_last_logins(image_path: Path, offset: int, index: dict) -> dict:
     """Liest letzten Login pro User aus /var/log/lastlog (binär, 292 Bytes/UID)."""
-    import struct
     LASTLOG_SIZE   = 292
     LASTLOG_STRUCT = struct.Struct('<l32s256s')
     result = {}
@@ -295,7 +296,6 @@ def _read_last_logins(image_path: Path, offset: int, index: dict) -> dict:
         try:
             ts_sec, _, host = LASTLOG_STRUCT.unpack(chunk)
             if ts_sec > 0:
-                from datetime import datetime
                 result[uid] = {
                     'time': datetime.utcfromtimestamp(ts_sec).strftime('%Y-%m-%d %H:%M UTC'),
                     'host': host.rstrip(b'\x00').decode('utf-8', errors='replace').strip(),
@@ -307,7 +307,6 @@ def _read_last_logins(image_path: Path, offset: int, index: dict) -> dict:
 
 def _read_login_methods(image_path: Path, offset: int, index: dict) -> dict:
     """Erkennt Login-Methoden pro User aus wtmp (binary) + auth.log (text)."""
-    import struct, re
     methods: dict = {}
 
     # Quelle 1: wtmp — Session-Typ erkennen
@@ -357,7 +356,6 @@ def _read_login_methods(image_path: Path, offset: int, index: dict) -> dict:
 
 def _read_sudo_rights(image_path: Path, offset: int, index: dict) -> list:
     """Liest Sudo-Rechte aus /etc/sudoers und /etc/sudoers.d/*."""
-    import re
     sudo_entries = []
     files_to_check = [k for k in index if k == 'etc/sudoers' or k.startswith('etc/sudoers.d/')]
     for path in files_to_check:
@@ -397,7 +395,6 @@ def _read_group_memberships(image_path: Path, offset: int, index: dict) -> dict:
 
 def _read_installed_packages(image_path: Path, offset: int, index: dict, os_family: str) -> dict:
     """Liest installierte Pakete — Debian: dpkg/status, Alpine: apk/db/installed."""
-    import re
     NOTABLE_PKGS = {
         'openssh-server', 'openssh-client', 'sudo', 'samba', 'smbclient',
         'apache2', 'nginx', 'httpd', 'docker.io', 'docker-ce', 'containerd',
@@ -456,7 +453,6 @@ def _read_enabled_services(index: dict) -> dict:
 
 def _read_ssh_config(image_path: Path, offset: int, index: dict) -> dict:
     """Liest /etc/ssh/sshd_config und extrahiert forensisch relevante Direktiven."""
-    import re
     cfg = {
         'permit_root_login': '', 'password_auth': '', 'pubkey_auth': '',
         'port': '22', 'allow_users': '', 'deny_users': '', 'max_auth_tries': '',
@@ -616,8 +612,6 @@ def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
 
 def _read_usage_period(image_path: Path, offset: int, index: dict, os_family: str = '') -> dict:
     """Ermittelt Nutzungszeitraum: erste + letzte bekannte Aktivität via Log-Dateien."""
-    import re
-    from datetime import datetime
 
     # Log-Quellen je OS-Familie (inkl. rotierte Logs für ältere Einträge)
     LOG_CANDIDATES = {
@@ -678,7 +672,6 @@ def _read_usage_period(image_path: Path, offset: int, index: dict, os_family: st
 def _read_network_config_structured(image_path: Path, offset: int,
                                     index: dict, os_family: str = '') -> dict:
     """Liest strukturierte Netzwerkkonfiguration: DNS, Gateway, Interfaces, MAC."""
-    import re
     net = {
         'interfaces':     [],
         'dns_servers':    [],
@@ -781,7 +774,6 @@ def _read_network_config_structured(image_path: Path, offset: int,
 
 def _read_install_time(image_path: Path, offset: int, index: dict, os_family: str = '') -> str:
     """Schätzt OS-Installationszeitpunkt — 3 Quellen, erste erfolgreiche gewinnt."""
-    import re
 
     # Quelle 1: Installer-Logs (zuverlässigste)
     installer_paths = {
@@ -818,7 +810,6 @@ def _read_install_time(image_path: Path, offset: int, index: dict, os_family: st
 
 def _read_user_creation_times(image_path: Path, offset: int, index: dict) -> dict:
     """Liest User-Erstellungszeiten aus auth.log oder secure via TSK."""
-    import re
     creation_times = {}
     for log_path in ('var/log/auth.log', 'var/log/secure'):
         if log_path not in index:
@@ -1001,7 +992,7 @@ def _read_ip_addresses(image_path) -> List[str]:
     return ips[:10]  # max 10 IPs
 
 
-def _profile_users(image_path, os_family: str = '') -> tuple[list, str, list, list]:
+def _profile_users(image_path, os_family: str = '') -> Tuple[list, str, list, list]:
     """Liest Nutzer-Profil via target-query."""
     if image_path is None:
         return [], '', [], []
