@@ -689,7 +689,7 @@ def _build_summary(findings: List, ctx) -> List:
 def _build_chain_of_custody(ctx) -> List:
     story = []
     story += _section_title("Pipeline-Ausführungsprotokoll")
-    story += _body_text("(Teil der forensischen Chain of Custody)")
+    story += [_p("(Teil der forensischen Chain of Custody)")]
 
     sha256    = getattr(ctx, "sha256",       "—")
     md5       = getattr(ctx, "md5",          "—")
