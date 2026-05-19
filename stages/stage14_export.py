@@ -603,7 +603,7 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
 
     # ── Seite 8: Pipeline-Ausführungsprotokoll ───────────────────────────────
     story.append(_h1('Pipeline-Ausführungsprotokoll'))
-    story.append(_para('(Teil der forensischen Chain of Custody)', 'Italic'))
+    story.append(_body('(Teil der forensischen Chain of Custody)'))
     story.append(_spacer(4))
     coc = ctx.coc
     if coc:
