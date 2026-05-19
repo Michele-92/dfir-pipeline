@@ -310,24 +310,32 @@ def _read_login_methods(image_path: Path, offset: int, index: dict) -> dict:
     methods: dict = {}
 
     # Quelle 1: wtmp — Session-Typ erkennen
-    WTMP_SIZE   = 388
-    WTMP_STRUCT = struct.Struct('<hh32s4s4shhiii4i20s')
+    # Linux utmp/wtmp x86-64: 384 Bytes, Felder per direktem Byte-Offset
+    # ut_type(0,2) | padding(2) | ut_pid(4,4) | ut_line(8,32) | ut_id(40,4)
+    # ut_user(44,32) | ut_host(76,256) | ...
+    WTMP_SIZE = 384
     for wtmp_path in ('var/log/wtmp',):
         if wtmp_path not in index:
             continue
         data = _read_icat_binary(image_path, offset, index[wtmp_path])
+        if not data:
+            continue
+        # Stride automatisch ermitteln (384 oder 392 je nach Architektur)
+        for stride in (384, 392):
+            if len(data) % stride == 0 and len(data) >= stride:
+                WTMP_SIZE = stride
+                break
         for i in range(len(data) // WTMP_SIZE):
             chunk = data[i * WTMP_SIZE:(i + 1) * WTMP_SIZE]
             if len(chunk) < WTMP_SIZE:
                 break
             try:
-                fields = WTMP_STRUCT.unpack(chunk)
-                ut_type = fields[0]
+                ut_type = struct.unpack_from('<h', chunk, 0)[0]
                 if ut_type != 7:  # USER_PROCESS
                     continue
-                ut_user = fields[4].rstrip(b'\x00').decode('utf-8', errors='replace').strip()
-                ut_line = fields[2].rstrip(b'\x00').decode('utf-8', errors='replace').strip()
-                ut_host = fields[3].rstrip(b'\x00').decode('utf-8', errors='replace').strip()
+                ut_line = chunk[8:40].rstrip(b'\x00').decode('utf-8', errors='replace').strip()
+                ut_user = chunk[44:76].rstrip(b'\x00').decode('utf-8', errors='replace').strip()
+                ut_host = chunk[76:332].rstrip(b'\x00').decode('utf-8', errors='replace').strip()
                 if not ut_user:
                     continue
                 s = methods.setdefault(ut_user, set())
@@ -657,7 +665,10 @@ def _read_usage_period(image_path: Path, offset: int, index: dict, os_family: st
             break
         # Letzte Aktivität: mtime via istat (append-only → mtime = letzter Eintrag)
         mtime = _read_shadow_mtime_tsk(image_path, offset, index[log_path])
-        if mtime and (not result['last_activity'] or mtime > result['last_activity']):
+        # Nur die ersten 19 Zeichen (YYYY-MM-DD HH:MM:SS) für ISO-Vergleich nutzen
+        mtime_cmp = mtime[:19] if mtime else ''
+        curr_cmp  = result['last_activity'][:19] if result['last_activity'] else ''
+        if mtime_cmp and (not curr_cmp or mtime_cmp > curr_cmp):
             result['last_activity'] = mtime
 
     if all_first:
