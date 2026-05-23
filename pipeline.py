@@ -129,10 +129,13 @@ def main():
 
     try:
         # ── Pipeline ausführen — Panel direkt nach jeder Stage ────────────────
-        ctx = run_stage(stage01_detection.run,          ctx, 'stage_01',   ui)
+        ctx = run_stage(stage01_detection.run,          ctx, 'stage_01',     ui)
         ui.show_stage01_detail(ctx)
 
-        ctx = run_stage(stage02_partition_layout.run,   ctx, 'stage_02',   ui)
+        ctx = run_stage(stage02_memory.run,             ctx, 'stage_02_mem', ui)
+        ui.show_stage02_detail(ctx)
+
+        ctx = run_stage(stage02_partition_layout.run,   ctx, 'stage_02',     ui)
         ui.show_stage02_partition_detail(ctx)
 
         ctx = run_stage(stage03_profiling.run,          ctx, 'stage_03',   ui)

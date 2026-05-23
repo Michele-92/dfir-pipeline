@@ -135,6 +135,33 @@ class PipelineContext:
     unexpected_users:   List[str]  = field(default_factory=list)
     partition_profiles: List[dict] = field(default_factory=list)
 
+    # ── Stage 03 Anti-Forensik-Erweiterung ───────────────────────────────
+    all_kernel_versions:     List[str]      = field(default_factory=list)
+    # Alle installierten vmlinuz-* Versionen (nicht nur die erste)
+
+    grub_config:             Dict           = field(default_factory=dict)
+    # {'active_kernel': str, 'fallback_kernels': List[str], 'grubenv_entry': str,
+    #  'boot_params': str, 'grub_default': str, 'antiforensic_params': List[str],
+    #  'sources': List[str]}
+
+    kernel_compile_flags:    Dict           = field(default_factory=dict)
+    # {'<kernel-version>': {'active_flags': List[str], 'has_antiforensics': bool}}
+
+    swap_config:             Dict           = field(default_factory=dict)
+    # {'found': bool, 'entries': [{'type': str, 'path': str, 'size_mb': float}]}
+
+    rc_local_content:        str            = ''
+    # Rohinhalt von /etc/rc.local (oder Alpine: /etc/local.d/*.start)
+
+    reboot_pending:          bool           = False
+    # True wenn /var/run/reboot-required existiert (Debian)
+
+    loaded_kernel_from_logs: str            = ''
+    # Kernel-Version aus "Linux version X" in kern.log / syslog / messages
+
+    primary_symlinks:        Dict[str, str] = field(default_factory=dict)
+    # {pfad: symlink_ziel} — fuer /dev/null Symlink-Erkennung in Stage 09
+
     # ── Stage 03.5: Basic Checks ──────────────────────────
     basic_checks:          List[dict] = field(default_factory=list)
     basic_check_anomalies: int        = 0

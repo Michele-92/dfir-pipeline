@@ -17,8 +17,9 @@ from rich.text import Text
 console = Console()
 
 STAGE_INFO = {
-    'stage_01':   ('01',    'Dateierkennung & Beweissicherung'),
-    'stage_02':   ('02',    'Partition-Layout'),
+    'stage_01':     ('01',     'Dateierkennung & Beweissicherung'),
+    'stage_02_mem': ('02_mem', 'RAM-Analyse (Volatility3)'),
+    'stage_02':     ('02',     'Partition-Layout'),
     'stage_03':   ('03',    'System-Profiling'),
     'stage_05':   ('05',    'Disk-Forensik'),
     'stage_03_5': ('03.5',  'Basic Checks'),
@@ -204,7 +205,7 @@ class PipelineUI:
                 if entries:
                     t.add_row(f'  {plugin}', f'{len(entries):,} Einträge')
         console.print(Panel(t,
-            title='[bold cyan]Stage 02 — Partition-Layout[/bold cyan]',
+            title='[bold cyan]Stage 02_mem — RAM-Analyse (Volatility3)[/bold cyan]',
             border_style='cyan', padding=(0, 1)))
 
     def show_stage02_partition_detail(self, ctx) -> None:
@@ -309,6 +310,61 @@ class PipelineUI:
                     t.add_row('AllowUsers', ssh['allow_users'])
                 if ssh.get('deny_users'):
                     t.add_row('DenyUsers', Text(ssh['deny_users'], style='yellow'))
+
+            # ── Kernel & Boot ─────────────────────────────────────────────
+            all_k = profile.get('all_kernels', [])
+            if all_k:
+                t.add_row('─── Kernel & Boot ───', '')
+                t.add_row('Installierte Kernel', ', '.join(all_k))
+                grub = profile.get('grub_config', {})
+                if grub.get('active_kernel'):
+                    t.add_row('GRUB-Default', grub['active_kernel'])
+                if grub.get('fallback_kernels'):
+                    t.add_row('Fallback-Kernel', ', '.join(grub['fallback_kernels']))
+                if grub.get('antiforensic_params'):
+                    t.add_row(
+                        Text('⚠️  GRUB Anti-Forensik', style='bold red'),
+                        Text(', '.join(grub['antiforensic_params']), style='bold red'),
+                    )
+                # Kernel Compile Flags
+                flags_map = profile.get('kernel_compile_flags', {})
+                for kver, kinfo in flags_map.items():
+                    if kinfo.get('has_antiforensics'):
+                        t.add_row(
+                            Text('⚠️  Kernel-Flags', style='bold red'),
+                            Text(', '.join(kinfo['active_flags']), style='red'),
+                        )
+
+            # Swap-Konfiguration
+            swap = profile.get('swap_config', {})
+            if swap:
+                if swap.get('found'):
+                    entries = swap.get('entries', [])
+                    swap_str = ', '.join(
+                        f"{e['type']}:{e['path']}" for e in entries[:3]
+                    )
+                    t.add_row('Swap', Text(f'✅  {swap_str}', style='green'))
+                else:
+                    t.add_row('Swap', Text('❌  Kein Swap konfiguriert', style='yellow'))
+
+            # Reboot ausstehend
+            if profile.get('reboot_pending'):
+                t.add_row(
+                    Text('⚠️  Pending Reboot', style='bold yellow'),
+                    Text('Kernel-Update installiert — kein Neustart erfolgt', style='yellow'),
+                )
+
+            # Geladener Kernel laut Logs
+            loaded_k = profile.get('loaded_kernel', '')
+            if loaded_k:
+                grub_default = profile.get('grub_config', {}).get('active_kernel', '')
+                if grub_default and loaded_k != grub_default:
+                    t.add_row(
+                        Text('⚠️  Kernel-Diskrepanz', style='bold red'),
+                        Text(f'GRUB={grub_default} | Geladen={loaded_k}', style='red'),
+                    )
+                else:
+                    t.add_row('Geladen (laut Logs)', loaded_k)
 
             # Installierte Pakete
             pkgs = profile.get('packages', {})
@@ -563,26 +619,95 @@ class PipelineUI:
         from collections import Counter
         type_counts = Counter(h.get('type', 'unbekannt') for h in ctx.antiforensics_hits)
 
+        # Typ-Labels: Icon, Farbe, Lesbare Bezeichnung
+        TYPE_META = {
+            'devnull_symlink':              ('🔴', 'red',     '/dev/null Symlinks'),
+            'rc_local_antiforensics':       ('🔴', 'red',     'rc.local Manipulation'),
+            'grub_memory_wipe':             ('🔴', 'red',     'GRUB Memory-Wipe-Params'),
+            'kernel_compile_antiforensics': ('🟠', 'orange3', 'Kernel Compile-Flags'),
+            'execstop_wiping':              ('🔴', 'red',     'ExecStop Wiping-Tool'),
+            'swap_missing':                 ('🟡', 'yellow',  'Swap fehlt'),
+            'kernel_discrepancy':           ('🟠', 'orange3', 'Kernel-Diskrepanz'),
+            'pending_reboot':               ('🟡', 'yellow',  'Pending Reboot'),
+            'journal_wtmp_mismatch':        ('🔴', 'red',     'Journal/wtmp Mismatch'),
+            'yara_match':                   ('🟡', 'yellow',  'YARA-Treffer'),
+            'timestomping':                 ('🔴', 'red',     'Timestomping'),
+            'log_deletion':                 ('🔴', 'red',     'Log-Wiping'),
+            'rootkit_indicator':            ('🔴', 'red',     'Rootkit-Indikator'),
+            'secure_delete':                ('🟠', 'orange3', 'Secure-Delete'),
+        }
+
         t = Table(box=box.ROUNDED, show_header=False, border_style='cyan', expand=True)
-        t.add_column('Feld', style='bold', min_width=22)
+        t.add_column('Feld', style='bold', min_width=28)
         t.add_column('Wert', style='white')
-        t.add_row('YARA-Regeln geladen', f"{len(ctx.antiforensics_hits) and '847' or '0'}")
         t.add_row('Treffer gesamt', Text(f'{len(ctx.antiforensics_hits):,}', style='bold'))
         t.add_row('', '')
         for hit_type, count in sorted(type_counts.items(), key=lambda x: -x[1]):
-            if hit_type == 'yara' or 'vmdetect' in hit_type.lower():
-                row_style = 'yellow'
-                note = '  ⚠️  wahrsch. False Positives'
-            else:
-                row_style = 'red'
-                note = '  🔴'
-            t.add_row(f'  {hit_type}',
-                      Text(f'{count:,}{note}', style=row_style))
+            icon, color, label = TYPE_META.get(hit_type, ('🔵', 'dim', hit_type))
+            # False-Positive-Hinweis nur fuer YARA/vmdetect
+            fp_note = '  ⚠️  wahrsch. False Positives' if (
+                'yara' in hit_type or 'vmdetect' in hit_type.lower()
+            ) else ''
+            t.add_row(
+                f'  {icon}  {label}',
+                Text(f'{count:,}{fp_note}', style=color),
+            )
+        # ── Top-5 Treffer Detail-Ansicht ─────────────────────────────────────
+        # Sortierung: critical > high > medium > low — YARA-Treffer ans Ende
+        SEVERITY_ORDER = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+        SEVERITY_STYLE = {'critical': 'bold red', 'high': 'red', 'medium': 'yellow', 'low': 'dim'}
+
+        non_yara = [h for h in ctx.antiforensics_hits
+                    if h.get('type') not in ('yara_match',)]
+        yara_hits = [h for h in ctx.antiforensics_hits
+                     if h.get('type') == 'yara_match']
+
+        top_hits = sorted(
+            non_yara,
+            key=lambda h: SEVERITY_ORDER.get(h.get('severity', 'low'), 9)
+        )[:5]
+
+        # Falls weniger als 5 Non-YARA-Treffer → YARA auffuellen
+        if len(top_hits) < 5:
+            top_hits += yara_hits[:5 - len(top_hits)]
+
+        if top_hits:
+            t.add_row('─── Top-Treffer (Detail) ───', '')
+            for i, hit in enumerate(top_hits, 1):
+                sev    = hit.get('severity', 'low')
+                htype  = hit.get('type', 'unbekannt')
+                icon, color, label = TYPE_META.get(htype, ('🔵', 'dim', htype))
+                sev_style = SEVERITY_STYLE.get(sev, 'white')
+                sev_upper = sev.upper()
+
+                # Zeile 1: Nummer + Typ + Severity
+                t.add_row(
+                    Text(f'  {i}.  {icon}  {label}', style='bold'),
+                    Text(f'[{sev_upper}]', style=sev_style),
+                )
+                # Zeile 2: Datei-Pfad (gekuerzt)
+                fpath = hit.get('file', '')
+                if fpath:
+                    t.add_row(
+                        Text('      Datei', style='dim'),
+                        Text(fpath[:90], style='dim'),
+                    )
+                # Zeile 3: Details (auf 110 Zeichen kuerzen)
+                details = hit.get('details', '')
+                if details:
+                    t.add_row(
+                        Text('      Detail', style='dim'),
+                        Text(details[:110], style=color),
+                    )
+                # Leerzeile zwischen Treffern (ausser nach letztem)
+                if i < len(top_hits):
+                    t.add_row('', '')
+
         t.add_row('', '')
-        t.add_row('Hinweis', 'YARA ist für Malware-Erkennung optimiert.')
+        t.add_row('Hinweis', 'YARA optimiert fuer Malware-Erkennung.')
         t.add_row('', 'vmdetect-Treffer auf .py-Dateien sind bekannte False Positives.')
         console.print(Panel(t,
-            title='[bold cyan]Stage 09 — Anti-Forensics (YARA)[/bold cyan]',
+            title='[bold cyan]Stage 09 — Anti-Forensics[/bold cyan]',
             border_style='cyan', padding=(0, 1)))
 
     def show_stage12_detail(self, ctx) -> None:

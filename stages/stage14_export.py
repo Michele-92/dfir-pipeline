@@ -533,7 +533,178 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
         story.append(_body('Keine Anomalien erkannt.'))
     story.append(PageBreak())
 
-    # ── Seite 6: Forensische Timeline ───────────────────────────────────────
+    # ── Seite 6: Anti-Forensics Systemkonfiguration (Stage 03) ──────────────
+    story.append(_h1('Anti-Forensics — Systemkonfiguration'))
+    story.append(_spacer(3))
+    story.append(_body(
+        'Systemkonfigurationsdaten die auf Anti-Forensik-Massnahmen hinweisen. '
+        'Extrahiert via TSK/icat aus dem Disk-Image ohne Mounting (forensisch unveraendert).'
+    ))
+    story.append(_spacer(5))
+
+    # ── GRUB-Konfiguration ────────────────────────────────────────────────────
+    story.append(_h2('GRUB-Bootloader-Konfiguration'))
+    story.append(_spacer(2))
+    grub = getattr(ctx, 'grub_config', {})
+    grub_rows = []
+    if grub.get('active_kernel'):
+        grub_rows.append(['Aktiver Kernel (GRUB-Default)', grub['active_kernel']])
+    if grub.get('fallback_kernels'):
+        grub_rows.append(['Fallback-Kernel', ', '.join(grub['fallback_kernels'])])
+    if grub.get('grubenv_entry'):
+        grub_rows.append(['grubenv saved_entry', grub['grubenv_entry']])
+    if grub.get('boot_params'):
+        grub_rows.append(['GRUB_CMDLINE_LINUX_DEFAULT', grub['boot_params'][:120]])
+    if grub.get('antiforensic_params'):
+        grub_rows.append(['⚠ Anti-Forensik-Parameter', ', '.join(grub['antiforensic_params'])])
+    else:
+        grub_rows.append(['Anti-Forensik-Parameter', 'Keine erkannt'])
+    if grub.get('sources'):
+        grub_rows.append(['Quellen', ', '.join(grub['sources'])])
+    if grub_rows:
+        from reportlab.platypus import Table as RLTable, TableStyle as RLTS
+        from reportlab.lib.colors import HexColor
+        data = [[r[0], r[1]] for r in grub_rows]
+        tbl = RLTable(data, colWidths=[60*mm, W - 60*mm])
+        style_cmds = [
+            ('BACKGROUND',   (0, 0), (0, -1), _rl_color_from_tuple(C_LIGHT_GREY)),
+            ('FONTNAME',     (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME',     (1, 0), (1, -1), 'Helvetica'),
+            ('FONTSIZE',     (0, 0), (-1, -1), 8),
+            ('GRID',         (0, 0), (-1, -1), 0.3, _rl_color_from_tuple((0xDD/255,)*3)),
+            ('LEFTPADDING',  (0, 0), (-1, -1), 5),
+            ('TOPPADDING',   (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING',(0, 0), (-1, -1), 4),
+        ]
+        # Anti-Forensik-Zeile rot markieren
+        for idx, r in enumerate(grub_rows):
+            if '⚠' in r[0]:
+                style_cmds.append(('BACKGROUND', (0, idx), (-1, idx),
+                                   _rl_color_from_tuple(C_RED_L)))
+                style_cmds.append(('TEXTCOLOR',  (0, idx), (-1, idx),
+                                   _rl_color_from_tuple(C_RED)))
+        tbl.setStyle(RLTS(style_cmds))
+        story.append(tbl)
+    else:
+        story.append(_body('Keine GRUB-Konfiguration gefunden (kein grub.cfg / grubenv im Image).'))
+    story.append(_spacer(5))
+
+    # ── Kernel Compile-Flags ──────────────────────────────────────────────────
+    story.append(_h2('Einkompilierte Kernel-Flags (/boot/config-*)'))
+    story.append(_spacer(2))
+    flags_map = getattr(ctx, 'kernel_compile_flags', {})
+    all_kernels = getattr(ctx, 'all_kernel_versions', [])
+    if flags_map:
+        rows = [['Kernel-Version', 'Aktive Anti-Forensik-Flags', 'Bewertung']]
+        for kver in all_kernels:
+            info = flags_map.get(kver)
+            if info is None:
+                rows.append([kver, '—  (keine /boot/config gefunden)', 'Unbekannt'])
+            elif info.get('has_antiforensics'):
+                rows.append([kver,
+                             '\n'.join(info['active_flags']),
+                             '⚠ VERDAECHTIG'])
+            else:
+                rows.append([kver, 'Keine Anti-Forensik-Flags aktiv', 'Unauffaellig'])
+        tbl = _table(rows, [55*mm, 95*mm, 20*mm])
+        # Rote Zeilen fuer verdaechtige Kernel
+        from reportlab.platypus import TableStyle as RLTS2
+        extra = []
+        for i, kver in enumerate(all_kernels, 1):
+            info = flags_map.get(kver, {})
+            if info.get('has_antiforensics'):
+                extra.append(('BACKGROUND', (0, i), (-1, i),
+                               _rl_color_from_tuple(C_RED_L)))
+                extra.append(('TEXTCOLOR',  (0, i), (-1, i),
+                               _rl_color_from_tuple(C_RED)))
+        if extra:
+            tbl.setStyle(RLTS2(tbl._style._cmds + extra))
+        story.append(tbl)
+    elif all_kernels:
+        story.append(_body(f'Kernel gefunden: {", ".join(all_kernels)}  — '
+                           f'keine /boot/config-* Dateien im Image vorhanden.'))
+    else:
+        story.append(_body('Keine installierten Kernel erkannt.'))
+    story.append(_spacer(5))
+
+    # ── Swap-Konfiguration ────────────────────────────────────────────────────
+    story.append(_h2('Swap-Konfiguration (/etc/fstab)'))
+    story.append(_spacer(2))
+    swap = getattr(ctx, 'swap_config', {})
+    if swap.get('found'):
+        entries = swap.get('entries', [])
+        swap_data = [['Typ', 'Pfad / UUID', 'Groesse']]
+        for e in entries:
+            swap_data.append([e.get('type', '—'), e.get('path', '—'),
+                              f"{e.get('size_mb', 0):.0f} MB" if e.get('size_mb') else '—'])
+        story.append(_table(swap_data, [35*mm, 110*mm, 25*mm]))
+    else:
+        story.append(_body(
+            '❌  Kein Swap konfiguriert.  Auf Desktop-Systemen verdaechtig — '
+            'RAM-Forensik aus Swap-Partition nicht moeglich.'
+        ))
+    story.append(_spacer(5))
+
+    # ── Ausstehender Reboot & Kernel-Diskrepanz ───────────────────────────────
+    reboot_pending = getattr(ctx, 'reboot_pending', False)
+    loaded_kernel  = getattr(ctx, 'loaded_kernel_from_logs', '')
+    active_kernel  = grub.get('active_kernel', '')
+    if reboot_pending or (active_kernel and loaded_kernel and active_kernel != loaded_kernel):
+        story.append(_h2('Kernel-Status & Reboot'))
+        story.append(_spacer(2))
+        state_rows = []
+        state_rows.append(['GRUB-Default-Kernel', active_kernel or '—'])
+        state_rows.append(['Geladen laut Logs',   loaded_kernel or '—'])
+        if active_kernel and loaded_kernel and active_kernel != loaded_kernel:
+            state_rows.append(['⚠ Kernel-Diskrepanz',
+                               f'GRUB={active_kernel}  ≠  Geladen={loaded_kernel}'])
+        if reboot_pending:
+            state_rows.append(['⚠ Pending Reboot',
+                               'Kernel-Update installiert — kein Neustart erfolgt'])
+        from reportlab.platypus import Table as RLT3, TableStyle as RLTS3
+        data3 = [[r[0], r[1]] for r in state_rows]
+        t3 = RLT3(data3, colWidths=[60*mm, W - 60*mm])
+        cmds3 = [
+            ('BACKGROUND',   (0, 0), (0, -1), _rl_color_from_tuple(C_LIGHT_GREY)),
+            ('FONTNAME',     (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME',     (1, 0), (1, -1), 'Helvetica'),
+            ('FONTSIZE',     (0, 0), (-1, -1), 8),
+            ('GRID',         (0, 0), (-1, -1), 0.3, _rl_color_from_tuple((0xDD/255,)*3)),
+            ('LEFTPADDING',  (0, 0), (-1, -1), 5),
+            ('TOPPADDING',   (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING',(0, 0), (-1, -1), 4),
+        ]
+        for idx, r in enumerate(state_rows):
+            if '⚠' in r[0]:
+                cmds3.append(('BACKGROUND', (0, idx), (-1, idx),
+                               _rl_color_from_tuple(C_ORANGE_L)))
+                cmds3.append(('TEXTCOLOR',  (0, idx), (-1, idx),
+                               _rl_color_from_tuple(C_ORANGE)))
+        t3.setStyle(RLTS3(cmds3))
+        story.append(t3)
+        story.append(_spacer(5))
+
+    # ── /dev/null Symlinks ────────────────────────────────────────────────────
+    symlinks = getattr(ctx, 'primary_symlinks', {})
+    devnull_symlinks = {p: t for p, t in symlinks.items() if '/dev/null' in t}
+    story.append(_h2('/dev/null Symlinks auf Log-Dateien'))
+    story.append(_spacer(2))
+    if devnull_symlinks:
+        rows = [['Pfad', 'Symlink-Ziel', 'Bewertung']]
+        for path, target in sorted(devnull_symlinks.items()):
+            rows.append([path, target, '⚠ KRITISCH — keine Protokollierung'])
+        tbl_sym = _table(rows, [65*mm, 55*mm, 50*mm])
+        story.append(tbl_sym)
+    else:
+        story.append(_body('Keine /dev/null Symlinks auf Log-Dateien erkannt.'))
+    story.append(_spacer(3))
+    story.append(_body(
+        'Methode: fls -r (Typ l/l = Symlink) + icat zum Lesen des Symlink-Ziels. '
+        'Forensisch unveraendert — kein Mounting des Images.'
+    ))
+    story.append(PageBreak())
+
+    # ── Seite 7: Forensische Timeline (vorher Seite 6) ───────────────────────
     story.append(_h1('Forensische Timeline'))
     story.append(_spacer(3))
     story.append(_body('Alle Zeitstempel sind in UTC. Die Timeline zeigt die '
@@ -576,7 +747,7 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     story.append(ts_box)
     story.append(PageBreak())
 
-    # ── Seite 7: System-Profiling & Pipeline-Status ──────────────────────────
+    # ── Seite 8: System-Profiling & Pipeline-Status ──────────────────────────
     story.append(_h1('System-Profiling & Pipeline-Status'))
     story.append(_spacer(4))
     kv3 = [
@@ -602,7 +773,7 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     story.append(_table(stage_rows, [35*mm, 40*mm, 95*mm]))
     story.append(PageBreak())
 
-    # ── Seite 8: Pipeline-Ausführungsprotokoll ───────────────────────────────
+    # ── Seite 9: Pipeline-Ausführungsprotokoll ───────────────────────────────
     story.append(_h1('Pipeline-Ausführungsprotokoll'))
     story.append(_body('(Teil der forensischen Chain of Custody)'))
     story.append(_spacer(4))
@@ -636,7 +807,7 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
                            'SHA256- und MD5-Hashwerte gesichert.'))
     story.append(PageBreak())
 
-    # ── Seite 9: Parser-Statistik ────────────────────────────────────────────
+    # ── Seite 10: Parser-Statistik ───────────────────────────────────────────
     story.append(_h1('Parser-Statistik'))
     story.append(_spacer(3))
     story.append(_body('Übersicht aller 38 Parser + Hayabusa (Stage 3.3) — '
@@ -704,7 +875,7 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     story.append(_table(rows, [38*mm, 52*mm, 20*mm, 60*mm]))
     story.append(PageBreak())
 
-    # ── Seite 10: YARA-Treffer & Erweiterte IOCs ─────────────────────────────
+    # ── Seite 11: YARA-Treffer & Erweiterte IOCs ─────────────────────────────
     story.append(_h1('YARA-Treffer & Erweiterte IOCs'))
     story.append(_spacer(3))
 

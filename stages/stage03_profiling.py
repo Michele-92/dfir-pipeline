@@ -5,7 +5,7 @@ import struct
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 from models.pipeline_context import PipelineContext
 
@@ -144,6 +144,42 @@ def run(ctx: PipelineContext) -> PipelineContext:
         'usage_period':   _read_usage_period(ctx.disk_image_path, primary_offset or 0, _primary_index, ctx.os_family),
         'net_config':     _read_network_config_structured(ctx.disk_image_path, primary_offset or 0, _primary_index, ctx.os_family),
     }
+
+    # ── Anti-Forensik-Rohdaten extrahieren ───────────────────────────────
+    _all_kernels    = _read_all_kernels(_primary_index)
+    _primary_grub   = _read_grub_config(ctx.disk_image_path, primary_offset or 0, _primary_index)
+    _compile_flags  = _read_kernel_compile_flags(
+        ctx.disk_image_path, primary_offset or 0, _primary_index, _all_kernels
+    )
+    _swap           = _read_swap_config(ctx.disk_image_path, primary_offset or 0, _primary_index)
+    _rc_local       = _read_rc_local(
+        ctx.disk_image_path, primary_offset or 0, _primary_index, ctx.os_family
+    )
+    _reboot_pending = _check_reboot_pending(_primary_index, ctx.os_family)
+    _loaded_kernel  = _read_loaded_kernel_from_logs(
+        ctx.disk_image_path, primary_offset or 0, _primary_index, ctx.os_family
+    )
+    _symlinks       = _index_symlinks(ctx.disk_image_path, primary_offset or 0)
+
+    # In ctx speichern
+    ctx.all_kernel_versions     = _all_kernels
+    ctx.grub_config             = _primary_grub
+    ctx.kernel_compile_flags    = _compile_flags
+    ctx.swap_config             = _swap
+    ctx.rc_local_content        = _rc_local
+    ctx.reboot_pending          = _reboot_pending
+    ctx.loaded_kernel_from_logs = _loaded_kernel
+    ctx.primary_symlinks        = _symlinks
+
+    # In primary_profile eintragen (fuer Report-Builder)
+    primary_profile['all_kernels']          = _all_kernels
+    primary_profile['grub_config']          = _primary_grub
+    primary_profile['kernel_compile_flags'] = _compile_flags
+    primary_profile['swap_config']          = _swap
+    primary_profile['rc_local_content']     = _rc_local
+    primary_profile['reboot_pending']       = _reboot_pending
+    primary_profile['loaded_kernel']        = _loaded_kernel
+
     # Primäre User anreichern
     _primary_last  = _read_last_logins(ctx.disk_image_path, primary_offset or 0, _primary_index)
     _primary_meth  = _read_login_methods(ctx.disk_image_path, primary_offset or 0, _primary_index)
@@ -550,13 +586,11 @@ def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
         if raw:
             profile['machine_id'] = raw.strip()
 
-    # Kernel (aus /boot/vmlinuz-* Dateinamen)
-    for path in sorted(index.keys()):
-        if path.startswith('boot/vmlinuz-'):
-            ver = path.replace('boot/vmlinuz-', '').strip()
-            if ver:
-                profile['kernel_version'] = ver
-                break
+    # Kernel (aus /boot/vmlinuz-* Dateinamen) — alle Versionen, nicht nur erste
+    all_k = _read_all_kernels(index)
+    if all_k:
+        profile['kernel_version'] = all_k[0]   # erste = GRUB-Default
+        profile['all_kernels']    = all_k
 
     # Users aus /etc/passwd
     if 'etc/passwd' in index:
@@ -1075,3 +1109,226 @@ def _all_log_paths() -> dict:
         'messages':Path('/var/log/messages'),
         'secure':  Path('/var/log/secure'),
     }
+
+
+# ── Anti-Forensik-Konstanten ──────────────────────────────────────────────────
+
+GRUB_ANTIFORENSIC_PARAMS = ['init_on_free=1', 'page_poison=1', 'slub_debug=P']
+
+KERNEL_ANTIFORENSIC_FLAGS = [
+    'CONFIG_INIT_ON_FREE_DEFAULT_ON=y',
+    'CONFIG_PAGE_POISONING=y',
+    'CONFIG_SLUB_DEBUG=y',
+]
+
+
+# ── Anti-Forensik-Extraktionsfunktionen ──────────────────────────────────────
+
+def _index_symlinks(image_path: Path, offset: int) -> Dict[str, str]:
+    """Gibt {path: symlink_target} fuer alle Symlinks zurueck (fls Typ 'l/l').
+    Liest Symlink-Ziel via icat — forensisch relevant fuer /dev/null Erkennung."""
+    fls_cmd  = shutil.which('fls')  or 'fls'
+    icat_cmd = shutil.which('icat') or 'icat'
+    symlinks: Dict[str, str] = {}
+    try:
+        res = subprocess.run(
+            [fls_cmd, '-r', '-p', '-o', str(offset), str(image_path)],
+            capture_output=True, text=True, timeout=60, errors='replace'
+        )
+        for line in res.stdout.splitlines():
+            if not line.startswith('l/l') or '\t' not in line:
+                continue
+            meta, path = line.split('\t', 1)
+            inode  = meta.strip().split()[-1].rstrip(':')
+            path_n = path.strip().lstrip('./').lower()
+            try:
+                res2 = subprocess.run(
+                    [icat_cmd, '-o', str(offset), str(image_path), inode],
+                    capture_output=True, text=True, timeout=10, errors='replace'
+                )
+                if res2.returncode == 0:
+                    symlinks[path_n] = res2.stdout.strip()
+            except Exception:
+                pass
+    except Exception as e:
+        log.debug(f'_index_symlinks fehlgeschlagen (offset={offset}): {e}')
+    return symlinks
+
+
+def _read_all_kernels(index: dict) -> List[str]:
+    """Alle installierten Kernel-Versionen aus boot/vmlinuz-* Eintraegen.
+    Gibt alle zurueck, nicht nur den ersten — wichtig fuer Multi-Kernel-Systeme."""
+    kernels: List[str] = []
+    for path in sorted(index.keys()):
+        if path.startswith('boot/vmlinuz-'):
+            ver = path.replace('boot/vmlinuz-', '').strip()
+            if ver and ver not in kernels:
+                kernels.append(ver)
+    return kernels
+
+
+def _read_grub_config(image_path: Path, offset: int, index: dict) -> dict:
+    """Liest GRUB-Konfiguration: aktiver Kernel, Fallback-Kernel, Boot-Parameter.
+    Multi-OS: boot/grub/ (Debian/Arch), boot/grub2/ (RHEL), extlinux.conf (Alpine).
+    Erkennt Anti-Forensik-Parameter: init_on_free=1, page_poison=1, slub_debug=P."""
+    result: dict = {
+        'active_kernel':       '',
+        'fallback_kernels':    [],
+        'grubenv_entry':       '',
+        'boot_params':         '',
+        'grub_default':        '',
+        'antiforensic_params': [],
+        'sources':             [],
+    }
+
+    # 1. grubenv → saved_entry (Debian/Arch: grub/, RHEL: grub2/)
+    for genv in ('boot/grub/grubenv', 'boot/grub2/grubenv'):
+        if genv in index:
+            content = _read_icat(image_path, offset, index[genv])
+            m = re.search(r'^saved_entry=(.+)$', content, re.MULTILINE)
+            if m:
+                result['grubenv_entry'] = m.group(1).strip()
+                result['sources'].append(genv)
+            break
+
+    # 2. grub.cfg → alle Kernel + set default + Anti-Forensik-Parameter
+    for gcfg in ('boot/grub/grub.cfg', 'boot/grub2/grub.cfg'):
+        if gcfg not in index:
+            continue
+        content = _read_icat(image_path, offset, index[gcfg])
+        result['sources'].append(gcfg)
+        m = re.search(r'^set default="?([^"\n]+)"?', content, re.MULTILINE)
+        if m:
+            result['grub_default'] = m.group(1).strip()
+        kernels = list(dict.fromkeys(
+            re.findall(r'linux\s+(?:/boot)?/vmlinuz-([a-zA-Z0-9\-\.\+]+)', content)
+        ))
+        if kernels:
+            result['active_kernel']    = kernels[0]
+            result['fallback_kernels'] = kernels[1:]
+        for line in content.splitlines():
+            if line.strip().startswith('linux '):
+                for param in GRUB_ANTIFORENSIC_PARAMS:
+                    if param in line and param not in result['antiforensic_params']:
+                        result['antiforensic_params'].append(param)
+        break
+
+    # 3. /etc/default/grub → GRUB_CMDLINE_LINUX_DEFAULT (alle Distros ausser Alpine)
+    if 'etc/default/grub' in index:
+        content = _read_icat(image_path, offset, index['etc/default/grub'])
+        result['sources'].append('etc/default/grub')
+        m = re.search(r'^GRUB_CMDLINE_LINUX_DEFAULT="([^"]*)"', content, re.MULTILINE)
+        if m:
+            result['boot_params'] = m.group(1)
+            for param in GRUB_ANTIFORENSIC_PARAMS:
+                if param in result['boot_params'] and param not in result['antiforensic_params']:
+                    result['antiforensic_params'].append(param)
+        m2 = re.search(r'^GRUB_DEFAULT=(.+)$', content, re.MULTILINE)
+        if m2 and not result['grub_default']:
+            result['grub_default'] = m2.group(1).strip().strip('"')
+
+    # 4. Alpine Fallback: Syslinux extlinux.conf
+    if not result['active_kernel'] and 'boot/extlinux.conf' in index:
+        content = _read_icat(image_path, offset, index['boot/extlinux.conf'])
+        result['sources'].append('boot/extlinux.conf')
+        m = re.search(r'KERNEL\s+/boot/vmlinuz-([a-zA-Z0-9\-\.\+]+)', content)
+        if m:
+            result['active_kernel'] = m.group(1)
+        for param in GRUB_ANTIFORENSIC_PARAMS:
+            if param in content and param not in result['antiforensic_params']:
+                result['antiforensic_params'].append(param)
+
+    return result
+
+
+def _read_kernel_compile_flags(image_path: Path, offset: int,
+                                index: dict, kernels: List[str]) -> dict:
+    """Liest /boot/config-<kernel> fuer alle Kernel-Versionen.
+    Gleich fuer alle Distros — Pfad und Flag-Namen sind kernel-level Standard.
+    Erkennt: CONFIG_INIT_ON_FREE_DEFAULT_ON, CONFIG_PAGE_POISONING, CONFIG_SLUB_DEBUG."""
+    result: dict = {}
+    for kernel in kernels:
+        cfg_path = f'boot/config-{kernel}'
+        if cfg_path not in index:
+            continue
+        content = _read_icat(image_path, offset, index[cfg_path])
+        if not content:
+            continue
+        active = [f for f in KERNEL_ANTIFORENSIC_FLAGS if f in content]
+        result[kernel] = {
+            'active_flags':      active,
+            'has_antiforensics': bool(active),
+        }
+    return result
+
+
+def _read_swap_config(image_path: Path, offset: int, index: dict) -> dict:
+    """Parst /etc/fstab auf Swap-Eintraege (Partition, Datei, UUID).
+    Gleich fuer alle Distros — fstab ist POSIX-Standard."""
+    result: dict = {'found': False, 'entries': []}
+    if 'etc/fstab' not in index:
+        return result
+    content = _read_icat(image_path, offset, index['etc/fstab'])
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        parts = line.split()
+        if len(parts) >= 3 and parts[2] == 'swap':
+            result['found'] = True
+            target = parts[0]
+            swap_type = (
+                'partition'      if target.startswith('/dev/')
+                else 'partition_uuid' if target.startswith(('UUID=', 'PARTUUID='))
+                else 'file'
+            )
+            result['entries'].append({'type': swap_type, 'path': target, 'size_mb': 0.0})
+    return result
+
+
+def _read_rc_local(image_path: Path, offset: int,
+                   index: dict, os_family: str = '') -> str:
+    """Liest /etc/rc.local Inhalt (Startup-Script).
+    Multi-OS: Debian/RHEL/Arch = etc/rc.local, Alpine = etc/local.d/*.start."""
+    for rc_path in ('etc/rc.local', 'etc/rc.d/rc.local'):
+        if rc_path in index:
+            return _read_icat(image_path, offset, index[rc_path])
+    if os_family == 'alpine':
+        parts = []
+        for path in sorted(index):
+            if path.startswith('etc/local.d/') and path.endswith('.start'):
+                parts.append(_read_icat(image_path, offset, index[path]))
+        if parts:
+            return '\n'.join(parts)
+    return ''
+
+
+def _check_reboot_pending(index: dict, os_family: str = '') -> bool:
+    """Prueft ob ein ausstehender Neustart vorliegt.
+    Debian: var/run/reboot-required Flag (zuverlässig).
+    RHEL/Arch/Alpine: kein standardisiertes Flag im Image erkennbar."""
+    return any(p in index for p in ('var/run/reboot-required', 'run/reboot-required'))
+
+
+def _read_loaded_kernel_from_logs(image_path: Path, offset: int,
+                                   index: dict, os_family: str) -> str:
+    """Liest tatsaechlich geladenen Kernel aus Kernel-Logs.
+    Multi-OS: Debian/Arch = kern.log, RHEL/Alpine = messages.
+    Suchbegriff 'Linux version X.Y.Z' ist kernel-level — ueberall gleich."""
+    LOG_CANDIDATES: Dict[str, List[str]] = {
+        'debian': ['var/log/kern.log', 'var/log/syslog'],
+        'rhel':   ['var/log/messages'],
+        'alpine': ['var/log/messages', 'var/log/syslog'],
+        'arch':   ['var/log/kern.log', 'var/log/syslog'],
+    }
+    pattern = re.compile(r'Linux version ([a-zA-Z0-9\-\.\+]+)')
+    for log_path in LOG_CANDIDATES.get(os_family, ['var/log/kern.log', 'var/log/messages']):
+        if log_path not in index:
+            continue
+        content = _read_icat(image_path, offset, index[log_path])
+        for line in content.splitlines():
+            if 'Linux version' in line:
+                m = pattern.search(line)
+                if m:
+                    return m.group(1)
+    return ''
