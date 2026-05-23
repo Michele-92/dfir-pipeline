@@ -12,6 +12,30 @@ def _tsk(cmd: str) -> str:
     return str(local) if local.exists() else cmd
 
 
+def read_e01_media_size(path: Path) -> int:
+    """Liest die logische Mediengröße eines E01-Images via TSK img_stat.
+
+    E01-Container sind komprimiert — path.stat().st_size gibt nur die
+    komprimierte Dateigröße zurück, nicht die Größe des Originaldatenträgers.
+    img_stat liefert 'Size of data in bytes' = unkomprimierte logische Größe.
+    Returns Größe in Bytes, 0 bei Fehler (Fallback: Dateigröße).
+    """
+    try:
+        result = subprocess.run(
+            [_tsk('img_stat'), str(path)],
+            capture_output=True, text=True, timeout=60
+        )
+        output = result.stdout + result.stderr
+        m = re.search(r'Size of data in bytes:\s*(\d+)', output, re.IGNORECASE)
+        if m:
+            size_bytes = int(m.group(1))
+            log.info(f'  E01 logische Mediengröße (img_stat): {size_bytes / (1024**3):.2f} GB')
+            return size_bytes
+    except Exception as e:
+        log.debug(f'E01-Mediengröße nicht lesbar: {e}')
+    return 0
+
+
 def read_e01_hashes(path: Path) -> tuple[str, str]:
     """Liest eingebettete MD5 aus E01-Datei via TSK img_stat.
 

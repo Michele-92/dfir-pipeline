@@ -6,7 +6,7 @@ from models.pipeline_context import PipelineContext
 from models.chain_of_custody import ChainOfCustody
 from utils.hashing import compute_both
 from utils.file_detection import detect_format, detect_format_by_extension
-from utils.e01_reader import read_e01_hashes
+from utils.e01_reader import read_e01_hashes, read_e01_media_size
 
 log = logging.getLogger(__name__)
 
@@ -27,8 +27,15 @@ def run(ctx: PipelineContext) -> PipelineContext:
     except (ImportError, Exception):
         ctx.file_type = detect_format_by_extension(path)
 
-    # Dateigröße
-    ctx.file_size_gb = path.stat().st_size / (1024 ** 3)
+    # Dateigröße — bei E01 logische Mediengröße via img_stat (komprimiertes
+    # Format: st_size = Dateigröße auf Disk ≠ Größe des Originaldatenträgers)
+    if ctx.file_type in ('E01', 'EWF'):
+        logical_bytes = read_e01_media_size(path)
+        ctx.file_size_gb = (logical_bytes / (1024 ** 3)
+                            if logical_bytes
+                            else path.stat().st_size / (1024 ** 3))
+    else:
+        ctx.file_size_gb = path.stat().st_size / (1024 ** 3)
     log.info(f'Format: {ctx.file_type}, Größe: {ctx.file_size_gb:.2f} GB')
 
     # Hashes — bei E01 eingebettete Hashes auslesen, sonst berechnen
