@@ -333,12 +333,39 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
         return Color(*t)
 
     def _h1(text):
-        return Paragraph(f'<font color="#{_hex(C_DARK_BLUE)}" size="14"><b>{text}</b></font>',
-                         styles['Normal'])
+        """Seitenüberschrift — dunkelblaue Unterlinie, gut sichtbar."""
+        from reportlab.platypus import Table as _T, TableStyle as _TS
+        p = Paragraph(
+            f'<font size="15"><b><font color="#{_hex(C_DARK_BLUE)}">{text}</font></b></font>',
+            styles['Normal']
+        )
+        t = _T([[p]], colWidths=[W])
+        t.setStyle(_TS([
+            ('LINEBELOW',     (0,0), (-1,-1), 2.5, _rl_color(C_DARK_BLUE)),
+            ('TOPPADDING',    (0,0), (-1,-1), 2),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 7),
+            ('LEFTPADDING',   (0,0), (-1,-1), 0),
+            ('RIGHTPADDING',  (0,0), (-1,-1), 0),
+        ]))
+        return t
 
     def _h2(text):
-        return Paragraph(f'<font color="#{_hex(C_MID_BLUE)}" size="11"><b>{text}</b></font>',
-                         styles['Normal'])
+        """Abschnittsüberschrift — blauer Balken links, klar abgesetzt."""
+        from reportlab.platypus import Table as _T, TableStyle as _TS
+        p = Paragraph(
+            f'<font size="10"><b><font color="#{_hex(C_MID_BLUE)}">{text}</font></b></font>',
+            styles['Normal']
+        )
+        t = _T([['', p]], colWidths=[4*mm, W - 4*mm])
+        t.setStyle(_TS([
+            ('BACKGROUND',    (0,0), (0,-1), _rl_color(C_MID_BLUE)),
+            ('TOPPADDING',    (0,0), (-1,-1), 5),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+            ('LEFTPADDING',   (0,0), (0,-1), 0),
+            ('LEFTPADDING',   (1,0), (1,-1), 8),
+            ('RIGHTPADDING',  (0,0), (-1,-1), 0),
+        ]))
+        return t
 
     def _body(text):
         return Paragraph(f'<font size="9" color="#{_hex(C_DARK_GREY)}">{text}</font>',
@@ -348,25 +375,35 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
         return Spacer(1, h*mm)
 
     def _table(data, col_widths=None, header=True):
+        """Datentabelle mit automatischem Zeilenumbruch in allen Zellen."""
         from reportlab.platypus import Table, TableStyle
-        from reportlab.lib.colors import Color, white, HexColor
-        t = Table(data, colWidths=col_widths, repeatRows=1 if header else 0)
-        style = [
-            ('BACKGROUND', (0,0), (-1,0), _rl_color(C_DARK_BLUE)),
-            ('TEXTCOLOR',  (0,0), (-1,0), _rl_color(C_WHITE)),
-            ('FONTNAME',   (0,0), (-1,0), 'Helvetica-Bold'),
-            ('FONTSIZE',   (0,0), (-1,-1), 8),
-            ('FONTNAME',   (0,1), (-1,-1), 'Helvetica'),
-            ('TEXTCOLOR',  (0,1), (-1,-1), _rl_color(C_DARK_GREY)),
-            ('ROWBACKGROUNDS',(0,1),(-1,-1),
+        from reportlab.lib.styles import ParagraphStyle
+        _hs = ParagraphStyle('th', fontSize=8, fontName='Helvetica-Bold',
+                              textColor=_rl_color(C_WHITE), leading=11)
+        _cs = ParagraphStyle('td', fontSize=8, fontName='Helvetica',
+                              textColor=_rl_color(C_DARK_GREY), leading=11)
+        wrapped = []
+        for i, row in enumerate(data):
+            wr = []
+            for cell in row:
+                if isinstance(cell, str):
+                    st = _hs if (header and i == 0) else _cs
+                    wr.append(Paragraph(cell.replace('\n', '<br/>'), st))
+                else:
+                    wr.append(cell)
+            wrapped.append(wr)
+        t = Table(wrapped, colWidths=col_widths, repeatRows=1 if header else 0)
+        t.setStyle(TableStyle([
+            ('BACKGROUND',    (0,0), (-1,0),  _rl_color(C_DARK_BLUE)),
+            ('ROWBACKGROUNDS',(0,1), (-1,-1),
              [_rl_color(C_WHITE), _rl_color(C_LIGHT_GREY)]),
-            ('GRID', (0,0), (-1,-1), 0.3, _rl_color((0xDD/255,)*3)),
-            ('LEFTPADDING',  (0,0), (-1,-1), 5),
-            ('RIGHTPADDING', (0,0), (-1,-1), 5),
-            ('TOPPADDING',   (0,0), (-1,-1), 4),
-            ('BOTTOMPADDING',(0,0), (-1,-1), 4),
-        ]
-        t.setStyle(TableStyle(style))
+            ('GRID',          (0,0), (-1,-1), 0.3, _rl_color((0xDD/255,)*3)),
+            ('LEFTPADDING',   (0,0), (-1,-1), 6),
+            ('RIGHTPADDING',  (0,0), (-1,-1), 6),
+            ('TOPPADDING',    (0,0), (-1,-1), 5),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+            ('VALIGN',        (0,0), (-1,-1), 'TOP'),
+        ]))
         return t
 
     W = A4[0] - 30*mm  # Nutzbare Breite
@@ -393,7 +430,7 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
         ['OS',           ctx.os_name or '-'],
         ['Kernel',       ctx.kernel_version or '-'],
         ['Hostname',     ctx.hostname or '-'],
-        ['Zeitzone',     ctx.timezone],
+        ['Zeitzone',     getattr(ctx, 'timezone_display', None) or ctx.timezone or '-'],
         ['Autopsy',      'Gelaufen' if ctx.autopsy_ran else ctx.autopsy_reason[:60]],
         ['TSK-Fallback', 'Aktiv' if ctx.tsk_fallback_used else 'Nicht noetig'],
     ]
@@ -779,7 +816,7 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     active_k       = grub.get('active_kernel', '')
     loaded_k       = getattr(ctx, 'loaded_kernel_from_logs', '')
     reboot_pending = getattr(ctx, 'reboot_pending', False)
-    if disc_hits or reboot_hits:
+    if disc_hits:
         story.append(_befund_pos(
             f'Es liegt eine Diskrepanz zwischen dem konfigurierten Default-Kernel '
             f'({active_k or "unbekannt"}) und dem tatsaechlich geladenen Kernel '
@@ -787,6 +824,13 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
             + (' Das Vorhandensein des Reboot-Flags belegt, dass das System seit dem '
                'Kernel-Update nicht neu gestartet wurde.'
                if reboot_pending else '')
+        ))
+    elif reboot_hits:
+        story.append(_befund_pos(
+            'Das System hat ein ausstehendes Kernel-Update — das Reboot-Flag ist gesetzt, '
+            'aber das System wurde noch nicht neu gestartet. '
+            f'Aktuell geladen laut Logs: {loaded_k or active_k or "unbekannt"}. '
+            'Es liegt keine Diskrepanz zwischen GRUB-Konfiguration und geladener Version vor.'
         ))
     else:
         story.append(_befund_neg(
@@ -943,7 +987,7 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
         ['Kernel (geladen, Logs)',   loaded_k_s7],
         ['Alle installierten Kernel', ', '.join(all_kernels_s7) or '-'],
         ['Hostname',                 ctx.hostname or '-'],
-        ['Zeitzone',                 ctx.timezone],
+        ['Zeitzone',                 getattr(ctx, 'timezone_display', None) or ctx.timezone or '-'],
         ['Image-Format',             ctx.file_type],
         ['Image-Groesse',            f'{ctx.file_size_gb:.2f} GB'],
         ['SHA256',                   ctx.sha256],
@@ -1285,11 +1329,11 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     story.append(_table(rows, [38*mm, 52*mm, 20*mm, 60*mm]))
     story.append(PageBreak())
 
-    # ── Anhang C: Chain of Custody (Kurzform) ─────────────────────────────────
-    story.append(_h1('C — Chain of Custody (Kurzform)'))
+    # ── Anhang C: Analyse-Protokoll (Chain of Custody) ───────────────────────
+    story.append(_h1('C — Analyse-Protokoll (Chain of Custody)'))
     story.append(_spacer(3))
     story.append(_body(
-        'Vollstaendiges Chain-of-Custody-Protokoll mit allen Einzelschritten: '
+        'Vollstaendiges Ausfuehrungs- und Beweismittelprotokoll mit allen Einzelschritten: '
         'chain_of_custody.pdf'
     ))
     story.append(_spacer(4))
@@ -1311,6 +1355,31 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
             'SHA256- und MD5-Hashwerte gesichert. Das vollstaendige Ausfuehrungsprotokoll '
             'ist Bestandteil der chain_of_custody.pdf.'
         ))
+
+    # ── Anhang D: Exportierte Ausgabedateien ──────────────────────────────────
+    story.append(_spacer(6))
+    story.append(_h1('D — Exportierte Ausgabedateien'))
+    story.append(_spacer(3))
+    story.append(_body(
+        'Die Pipeline generiert folgende Dateien im Case-Verzeichnis:'
+    ))
+    story.append(_spacer(3))
+    export_files = [
+        ['Datei',                      'Beschreibung'],
+        ['report.pdf',                 'Dieser forensische Analysebericht (PDF)'],
+        ['chain_of_custody.pdf',       'Vollstaendiges Ausfuehrungsprotokoll mit Hashwerten und Einzelschritten'],
+        ['pipeline_report.json',       'Maschinenlesbare Zusammenfassung aller Stage-Ergebnisse (JSON)'],
+        ['iocs.json',                  'Vollstaendige IOC-Liste (IP, Domain, Hash, E-Mail, CVE)'],
+        ['antiforensics.json',         'Alle Anti-Forensik-Treffer (Typ, Datei, Details, Schwere)'],
+        ['activity_timeline.csv',      'Kombinierte Event-Timeline (Logins, Reboots, Crashes) — UTC-Zeitstempel'],
+        ['login_events.csv',           'Alle Login-Events (SSH, PAM, Konsole) — Benutzer, IP, Methode'],
+        ['system_reboots.csv',         'Alle Reboot- und Shutdown-Ereignisse — Zeitstempel, Quelle'],
+        ['system_crashes.csv',         'Kernel-Panics, OOM-Kills, Segfaults — Schwere, Quelle'],
+        ['filesystem_timeline.csv',    'MACtime-Dateisystem-Timeline — MACB-Typ, Pfad, Zeitstempel'],
+        ['timesketch_link.txt',        'URL zur interaktiven Timesketch-Timeline (wenn Upload erfolgreich)'],
+    ]
+    story.append(_table(export_files, [55*mm, 115*mm]))
+    story.append(_spacer(3))
 
     # ── AUSKOMMENTIERT: Alt Seite 11 — YARA + Erweiterte IOCs ────────────────
     # YARA-Treffer sind Teil von ctx.antiforensics_hits (type='yara_match').
@@ -1393,20 +1462,29 @@ def _banner(text, bg, fg, size, width):
 
 
 def _kv_table(rows, width, rl_fn):
-    from reportlab.platypus import Table, TableStyle
-    data = [[r[0], r[1]] for r in rows]
-    t = Table(data, colWidths=[50*_mm_val(), width - 50*_mm_val()])
+    """Key-Value-Tabelle mit automatischem Zeilenumbruch in der Wert-Spalte."""
+    from reportlab.platypus import Table, TableStyle, Paragraph
+    from reportlab.lib.styles import ParagraphStyle
+    KEY_W = 62 * _mm_val()
+    VAL_W = width - KEY_W
+    _ks = ParagraphStyle('kv_k', fontSize=8, fontName='Helvetica-Bold',
+                          textColor=_rl_color_from_tuple(C_DARK_GREY), leading=11)
+    _vs = ParagraphStyle('kv_v', fontSize=8, fontName='Helvetica',
+                          textColor=_rl_color_from_tuple(C_DARK_GREY), leading=11)
+    data = [
+        [Paragraph(str(r[0]), _ks), Paragraph(str(r[1]), _vs)]
+        for r in rows
+    ]
+    t = Table(data, colWidths=[KEY_W, VAL_W])
     t.setStyle(TableStyle([
-        ('BACKGROUND',  (0,0), (0,-1), _rl_color_from_tuple(C_LIGHT_GREY)),
-        ('BACKGROUND',  (1,0), (1,-1), _rl_color_from_tuple(C_WHITE)),
-        ('FONTNAME',    (0,0), (0,-1), 'Helvetica-Bold'),
-        ('FONTNAME',    (1,0), (1,-1), 'Helvetica'),
-        ('FONTSIZE',    (0,0), (-1,-1), 8),
-        ('GRID',        (0,0), (-1,-1), 0.3, _rl_color_from_tuple((0xDD/255,)*3)),
-        ('LEFTPADDING', (0,0), (-1,-1), 5),
-        ('RIGHTPADDING',(0,0), (-1,-1), 5),
-        ('TOPPADDING',  (0,0), (-1,-1), 4),
-        ('BOTTOMPADDING',(0,0),(-1,-1), 4),
+        ('BACKGROUND',   (0,0), (0,-1), _rl_color_from_tuple(C_LIGHT_GREY)),
+        ('BACKGROUND',   (1,0), (1,-1), _rl_color_from_tuple(C_WHITE)),
+        ('GRID',         (0,0), (-1,-1), 0.3, _rl_color_from_tuple((0xDD/255,)*3)),
+        ('LEFTPADDING',  (0,0), (-1,-1), 6),
+        ('RIGHTPADDING', (0,0), (-1,-1), 6),
+        ('TOPPADDING',   (0,0), (-1,-1), 5),
+        ('BOTTOMPADDING',(0,0), (-1,-1), 5),
+        ('VALIGN',       (0,0), (-1,-1), 'TOP'),
     ]))
     return t
 
