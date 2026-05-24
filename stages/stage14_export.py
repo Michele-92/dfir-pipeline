@@ -439,7 +439,79 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     story.append(_kv_table(kv2, W, _rl_color))
     story.append(PageBreak())
 
-    # ── Seite 2: Executive Summary ───────────────────────────────────────────
+    # ── Seite 2: Partition-Layout ────────────────────────────────────────────
+    story.append(_h1('Partition-Layout'))
+    story.append(_spacer(3))
+    story.append(_body(
+        'Uebersicht aller erkannten Partitionen im Disk-Image. '
+        'Primaerpartition = Betriebssystem-Partition (OS-Erkennung). '
+        'Offset in 512-Byte-Sektoren (TSK-Standard).'
+    ))
+    story.append(_spacer(4))
+
+    # Merge: analysis_partitions (Basis) + tsk_partitions (Analyse-Status) + partition_profiles (OS)
+    _tsk_by_offset  = {p['offset']: p for p in (ctx.tsk_partitions or [])}
+    _prof_by_offset = {p['offset']: p for p in (ctx.partition_profiles or [])}
+    _ap             = ctx.analysis_partitions or []
+
+    if _ap:
+        part_rows = [['#', 'Offset (Sektoren)', 'Groesse', 'Dateisystem', 'OS / Rolle', 'Dateien', 'Status']]
+        for p in sorted(_ap, key=lambda x: x.get('offset', 0)):
+            off  = p.get('offset', 0)
+            size = p.get('size_mb', 0)
+            size_str = f'{size:.0f} MB' if size < 1024 else f'{size/1024:.2f} GB'
+            tsk  = _tsk_by_offset.get(off, {})
+            prof = _prof_by_offset.get(off, {})
+            # OS-Rolle
+            os_str = prof.get('os_name', '') or prof.get('os_family', '') or '—'
+            if prof.get('is_primary'):
+                os_str = f'[Primaer] {os_str}'
+            # Dateien
+            files_str = f"{tsk.get('files', 0):,}" if tsk else '—'
+            # Status
+            tsk_status = tsk.get('status', '')
+            if tsk_status == 'analysiert':
+                status_str = '✅ analysiert'
+            elif tsk_status:
+                status_str = f'⏭ {tsk_status}'
+            else:
+                status_str = '— nicht via TSK'
+            part_rows.append([
+                str(p.get('index', '?')),
+                str(off),
+                size_str,
+                p.get('fs_type', '—'),
+                os_str,
+                files_str,
+                status_str,
+            ])
+        story.append(_table(part_rows, [12*mm, 38*mm, 22*mm, 25*mm, 45*mm, 18*mm, 30*mm]))
+    else:
+        story.append(_body('Keine Partitionsdaten verfuegbar (Stage 02 nicht ausgefuehrt oder fehlgeschlagen).'))
+
+    story.append(_spacer(4))
+
+    # E01-Hashes (forensische Integritaet des Images)
+    story.append(_h2('Forensische Integritaet des Beweismittels'))
+    story.append(_spacer(2))
+    hash_rows = [
+        ['Dateiname',   ctx.disk_image_path.name if ctx.disk_image_path else '—'],
+        ['SHA256',      ctx.sha256 or '—'],
+        ['MD5',         ctx.md5 or '—'],
+        ['Groesse',     f'{ctx.file_size_gb:.3f} GB' if ctx.file_size_gb else '—'],
+        ['Format',      ctx.file_type or '—'],
+    ]
+    # E01-interne Hashwerte falls vorhanden
+    e01_hash = getattr(ctx, 'e01_hash', '')
+    e01_md5  = getattr(ctx, 'e01_md5', '')
+    if e01_hash:
+        hash_rows.append(['E01-interner SHA256', e01_hash])
+    if e01_md5:
+        hash_rows.append(['E01-interner MD5', e01_md5])
+    story.append(_kv_table(hash_rows, W, _rl_color))
+    story.append(PageBreak())
+
+    # ── Seite 3: Executive Summary ─────────────────────────────────────────────
     story.append(_h1('Executive Summary'))
     story.append(_spacer(4))
     stats = [
@@ -1027,6 +1099,99 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
             'Alle aktivierten Services entsprechen dem erwarteten Standard-Set '
             'der erkannten OS-Familie. Es wurden keine abweichenden Dienste festgestellt.'
         ))
+    story.append(PageBreak())
+
+    # ── Seite 8: Basic Checks — Log-Praesenz & Konsistenz ────────────────────
+    story.append(_h1('Basic Checks — Log-Praesenz & Konsistenz'))
+    story.append(_spacer(3))
+    story.append(_body(
+        'Automatische Ueberpruefung: (1) Pflicht-Logs pro OS-Familie vorhanden? '
+        '(2) Installierte Dienste haben erwartete Log-Dateien? '
+        '(3) Log-Dateien ohne zugehoerige Installation vorhanden (Anomalie)?'
+    ))
+    story.append(_spacer(4))
+
+    _bc       = getattr(ctx, 'basic_checks', [])
+    _bc_anom  = getattr(ctx, 'basic_check_anomalies', 0)
+
+    if not _bc:
+        story.append(_body(
+            f'Basic Checks nicht ausgefuehrt — OS-Familie "{ctx.os_family}" '
+            f'hat kein Pruef-Profil oder Stage 03.5 wurde uebersprungen.'
+        ))
+    else:
+        # Zusammenfassung-Box
+        _bc_total = len(_bc)
+        _bc_ok    = sum(1 for c in _bc if not c.get('anomaly') and c.get('found'))
+        if _bc_anom == 0:
+            bc_summary_bg     = C_GREEN_L
+            bc_summary_border = C_GREEN
+            bc_summary_text   = f'Alle {_bc_total} Checks ohne Anomalie — keine verdaechtigen Log-Abweichungen erkannt.'
+        else:
+            bc_summary_bg     = C_ORANGE_L
+            bc_summary_border = C_ORANGE
+            bc_summary_text   = (
+                f'{_bc_anom} Anomalie(n) in {_bc_total} geprueften Eintraegen erkannt. '
+                f'Details: rote / gelbe Zeilen in der Tabelle unten.'
+            )
+        bc_box = Table([[Paragraph(
+            f'<font size="9"><b>{bc_summary_text}</b></font>',
+            _normal_style_left()
+        )]], colWidths=[W])
+        bc_box.setStyle(TableStyle([
+            ('BACKGROUND',    (0, 0), (-1, -1), _rl_color_from_tuple(bc_summary_bg)),
+            ('BOX',           (0, 0), (-1, -1), 1.5, _rl_color_from_tuple(bc_summary_border)),
+            ('TOPPADDING',    (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 10),
+        ]))
+        story.append(bc_box)
+        story.append(_spacer(4))
+
+        # Tabelle: alle Checks
+        bc_rows = [['Service / Log', 'Pfad', 'Erwartet', 'Gefunden', 'Anomalie']]
+        for c in _bc:
+            erw_txt  = 'Pflicht' if c.get('expected') else 'Bedingt'
+            gef_txt  = '✅ Ja'   if c.get('found')    else '❌ Nein'
+            anom_txt = c.get('anomaly', '') or '—'
+            bc_rows.append([
+                c.get('service',  '—'),
+                c.get('log_path', '—'),
+                erw_txt,
+                gef_txt,
+                anom_txt[:80],
+            ])
+        bc_tbl = _table(bc_rows, [35*mm, 52*mm, 18*mm, 18*mm, 47*mm])
+
+        # Anomalie-Zeilen rot/orange hervorheben
+        from reportlab.platypus import TableStyle as _BCTS
+        extra_cmds = []
+        for i, c in enumerate(_bc, 1):   # i=1: erste Datenzeile (0 = Header)
+            atype = c.get('anomaly_type', '')
+            if atype == 'mandatory_missing':
+                extra_cmds += [
+                    ('BACKGROUND', (0, i), (-1, i), _rl_color_from_tuple(C_RED_L)),
+                    ('TEXTCOLOR',  (0, i), (-1, i), _rl_color_from_tuple(C_RED)),
+                ]
+            elif atype in ('install_without_log', 'log_without_install'):
+                extra_cmds += [
+                    ('BACKGROUND', (0, i), (-1, i), _rl_color_from_tuple(C_ORANGE_L)),
+                    ('TEXTCOLOR',  (0, i), (-1, i), _rl_color_from_tuple(C_ORANGE)),
+                ]
+        if extra_cmds:
+            bc_tbl.setStyle(_BCTS(bc_tbl._style._cmds + extra_cmds))
+        story.append(bc_tbl)
+
+        # Legende
+        story.append(_spacer(3))
+        story.append(_body(
+            '<font color="#{}">■</font> Pflicht-Log fehlt (kritisch)  '
+            '<font color="#{}">■</font> Dienst installiert ohne Log / Log ohne Dienst (verdaechtig)  '
+            '<font color="#{}">■</font> Unauffaellig'.format(
+                _hex(C_RED), _hex(C_ORANGE), _hex(C_GREEN)
+            )
+        ))
+
     story.append(PageBreak())
 
     # ══ ANHANG ════════════════════════════════════════════════════════════════

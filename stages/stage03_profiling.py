@@ -230,9 +230,11 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
     _primary_index = _index_partition(ctx.disk_image_path, primary_offset) if primary_offset else {}
 
-    # TSK-Fallback für Nutzer: falls target-query keine Nutzer liefert,
-    # /etc/passwd direkt via TSK/icat lesen (gleiche Logik wie Sekundärpartitionen)
-    if not ctx.users and 'etc/passwd' in _primary_index and primary_offset is not None:
+    # TSK-Fallback für Nutzer: falls target-query keinen regulären User (UID ≥ 1000) liefert,
+    # /etc/passwd direkt via TSK/icat lesen. Bedingung: KEIN User mit UID ≥ 1000 vorhanden
+    # (nicht nur komplett leere Liste — target-query kann root parsen aber UID-1000-User verpassen).
+    _has_regular_user = any(u.get('uid', -1) >= 1000 for u in ctx.users)
+    if not _has_regular_user and 'etc/passwd' in _primary_index and primary_offset is not None:
         log.info('  Nutzer-Fallback: target-query leer → lese /etc/passwd via TSK')
         raw_passwd = _read_icat(ctx.disk_image_path, primary_offset,
                                 _primary_index['etc/passwd'])
@@ -305,6 +307,26 @@ def run(ctx: PipelineContext) -> PipelineContext:
     ctx.reboot_pending          = _reboot_pending
     ctx.loaded_kernel_from_logs = _loaded_kernel
     ctx.primary_symlinks        = _symlinks
+
+    # ── Bug-Fix: Kernel-Version validieren ───────────────────────────────────
+    # target-query -f version kann den OS-Namen zurückgeben ("Ubuntu 20.04.5 LTS")
+    # statt der Kernel-Version ("5.15.0-1031-aws"). Eine echte Kernel-Version
+    # beginnt immer mit Ziffern und Punkten (z.B. 5.15.0, 6.1.0-21).
+    if ctx.kernel_version and not re.search(r'^\d+\.\d+', ctx.kernel_version):
+        _k_fix = ''
+        if _all_kernels:
+            _k_fix = _all_kernels[0]
+        elif _primary_grub.get('active_kernel'):
+            _k_fix = _primary_grub['active_kernel']
+        if _k_fix:
+            log.debug(
+                f'  Kernel-Fix: target-query gab "{ctx.kernel_version}" '
+                f'(sieht wie OS-Name aus) → override mit "{_k_fix}" aus /boot/vmlinuz-*'
+            )
+            ctx.kernel_version = _k_fix
+
+    # primary_profile mit ggf. korrigierter Kernel-Version synchronisieren
+    primary_profile['kernel_version'] = ctx.kernel_version
 
     # In primary_profile eintragen (fuer Report-Builder)
     primary_profile['all_kernels']          = _all_kernels
@@ -1089,7 +1111,9 @@ def _read_os_release(image_path) -> str:
         if result.returncode != 0:
             log.debug(f'target-query os stderr: {result.stderr.strip()}')
         raw = _parse_target_line(result.stdout) or result.stdout.strip()
-        if raw and raw.lower() not in ('linux', 'unknown', ''):
+        # Nur vertrauen wenn Ausgabe wie os-release-Inhalt aussieht (KEY=VALUE).
+        # Einzelne Wörter wie "alpine", "linux" etc. sind zu generisch — TSK-Fallback.
+        if raw and raw.lower() not in ('linux', 'unknown', '') and '=' in raw:
             return raw
     except Exception as e:
         log.debug(f'target-query os fehlgeschlagen: {e}')
