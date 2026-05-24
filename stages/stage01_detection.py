@@ -27,15 +27,18 @@ def run(ctx: PipelineContext) -> PipelineContext:
     except (ImportError, Exception):
         ctx.file_type = detect_format_by_extension(path)
 
-    # Dateigröße — bei E01 logische Mediengröße via img_stat (komprimiertes
-    # Format: st_size = Dateigröße auf Disk ≠ Größe des Originaldatenträgers)
+    # Dateigröße — bei E01 beide Größen speichern:
+    #   file_size_gb           = logische Disk-Größe (unkomprimiert, via img_stat)
+    #   file_size_compressed_gb = physische Dateigröße der E01-Datei auf Disk
     if ctx.file_type in ('E01', 'EWF'):
+        ctx.file_size_compressed_gb = path.stat().st_size / (1024 ** 3)
         logical_bytes = read_e01_media_size(path)
         ctx.file_size_gb = (logical_bytes / (1024 ** 3)
                             if logical_bytes
-                            else path.stat().st_size / (1024 ** 3))
+                            else ctx.file_size_compressed_gb)
     else:
         ctx.file_size_gb = path.stat().st_size / (1024 ** 3)
+        ctx.file_size_compressed_gb = 0.0
     log.info(f'Format: {ctx.file_type}, Größe: {ctx.file_size_gb:.2f} GB')
 
     # Hashes — bei E01 eingebettete Hashes auslesen, sonst berechnen

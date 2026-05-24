@@ -19,10 +19,11 @@ class PipelineContext:
     case_dir:           Optional[Path] = None
 
     # ── Stage 1: Dateierkennung ───────────────────────────
-    file_type:          str   = ''
-    file_size_gb:       float = 0.0
-    sha256:             str   = ''
-    md5:                str   = ''
+    file_type:              str   = ''
+    file_size_gb:           float = 0.0   # logische Disk-Größe (bei E01: unkomprimiert)
+    file_size_compressed_gb: float = 0.0  # physische Dateigröße auf Disk (nur E01/EWF)
+    sha256:                 str   = ''
+    md5:                    str   = ''
 
     # ── Stage 2: Memory ───────────────────────────────────
     memory_results:     Dict[str, Any] = field(default_factory=dict)

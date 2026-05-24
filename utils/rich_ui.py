@@ -176,7 +176,12 @@ class PipelineUI:
         t.add_column('Wert', style='white')
         t.add_row('Dateiname',  ctx.disk_image_path.name if ctx.disk_image_path else '?')
         t.add_row('Format',     ctx.file_type or '?')
-        t.add_row('Größe',      f'{ctx.file_size_gb:.2f} GB')
+        compressed = getattr(ctx, 'file_size_compressed_gb', 0.0)
+        if compressed and compressed > 0.0:
+            t.add_row('Größe (E01-Datei)',    f'{compressed:.2f} GB  [dim](komprimiert auf Datenträger)[/dim]')
+            t.add_row('Größe (Disk-Image)',   f'{ctx.file_size_gb:.2f} GB  [dim](logisch / unkomprimiert)[/dim]')
+        else:
+            t.add_row('Größe',      f'{ctx.file_size_gb:.2f} GB')
         t.add_row('SHA256',     ctx.sha256[:32] + '...' if ctx.sha256 else '?')
         t.add_row('MD5',        ctx.md5[:32] + '...' if ctx.md5 else '?')
         hash_src = getattr(ctx, 'hash_source', 'Berechnet')
