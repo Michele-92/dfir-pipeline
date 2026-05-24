@@ -109,7 +109,17 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
     out_dir = ctx.case_dir / 'raw' / 'disk_artefakte' if ctx.case_dir else Path('/tmp/tsk_out')
     out_dir.mkdir(parents=True, exist_ok=True)
-    _recover_deleted(ctx.disk_image_path, out_dir)
+
+    # Wiederherstellung gelöschter Dateien — PRO PARTITION mit Offset.
+    # Früher: tsk_recover <image> <out> (kein Offset) → scannte das komplette
+    # Image und alle Partitionen gleichzeitig → OOM-Killer SIGKILL auf großen Images.
+    # Fix: -o <offset> pro analysierter Partition → isoliert + RAM-sicher.
+    for part_info in ctx.tsk_partitions:
+        if part_info.get('status') != 'analysiert':
+            continue
+        part_out = out_dir / f'partition_{part_info["offset"]}'
+        part_out.mkdir(parents=True, exist_ok=True)
+        _recover_deleted(ctx.disk_image_path, part_out, offset=part_info['offset'])
 
     # Wiederhergestellte Dateien zählen
     recovered_files = [f for f in out_dir.rglob('*') if f.is_file()]
@@ -458,12 +468,16 @@ def _run_sorter(image_path: Path, offset: int,
         log.warning(f'  Sorter fehlgeschlagen: {e}')
 
 
-def _recover_deleted(image_path: Path, out_dir: Path) -> None:
+def _recover_deleted(image_path: Path, out_dir: Path, offset: int = 0) -> None:
+    """Stellt gelöschte Dateien via tsk_recover wieder her.
+    offset MUSS gesetzt sein — ohne Offset scannt tsk_recover das gesamte Image
+    aller Partitionen gleichzeitig und triggert den OOM-Killer auf großen Images."""
+    cmd = [_tsk('tsk_recover')]
+    if offset:
+        cmd += ['-o', str(offset)]
+    cmd += [str(image_path), str(out_dir)]
     try:
-        subprocess.run(
-            [_tsk('tsk_recover'), str(image_path), str(out_dir)],
-            capture_output=True, timeout=600
-        )
-        log.info(f'  Gelöschte Dateien wiederhergestellt → {out_dir}')
+        subprocess.run(cmd, capture_output=True, timeout=600)
+        log.info(f'  Gelöschte Dateien wiederhergestellt (offset={offset}) → {out_dir}')
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        log.warning(f'tsk_recover fehlgeschlagen: {e}')
+        log.warning(f'tsk_recover fehlgeschlagen (offset={offset}): {e}')

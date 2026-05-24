@@ -381,6 +381,13 @@ class PipelineUI:
             svcs = profile.get('services', {})
             if svcs.get('enabled'):
                 t.add_row('Services aktiv', ', '.join(svcs['enabled'][:8]))
+            non_std = svcs.get('non_standard', [])
+            if non_std:
+                ns_str = ', '.join(non_std[:8])
+                if len(non_std) > 8:
+                    ns_str += f'  [dim](+{len(non_std) - 8} weitere)[/dim]'
+                t.add_row('[bold yellow]⚠ Non-Standard Services[/bold yellow]',
+                          f'[bold yellow]{ns_str}[/bold yellow]')
 
             users            = profile.get('users', [])
             notable_users    = profile.get('notable_users', [])

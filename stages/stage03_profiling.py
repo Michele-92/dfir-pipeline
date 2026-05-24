@@ -3,6 +3,7 @@ import re
 import shutil
 import struct
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple, Dict
@@ -76,6 +77,120 @@ KNOWN_SYSTEM_USERS = {
         'systemd-journal-remote','systemd-network','systemd-resolve',
         'systemd-timesync','systemd-coredump','polkitd','rtkit','avahi',
         'colord','gdm','sddm','lightdm',
+    },
+}
+
+
+# Standard-Services je OS-Familie — Services die NICHT in dieser Liste stehen
+# werden als "non-standard" markiert (möglicher forensischer Hinweis).
+STANDARD_SERVICES: Dict[str, set] = {
+    'debian': {
+        # systemd Kern-Services
+        'systemd-journald', 'systemd-logind', 'systemd-networkd', 'systemd-resolved',
+        'systemd-timesyncd', 'systemd-udevd', 'systemd-tmpfiles-setup',
+        'systemd-tmpfiles-clean', 'systemd-update-utmp', 'systemd-modules-load',
+        'systemd-sysctl', 'systemd-remount-fs', 'systemd-fsck-root', 'systemd-fsck',
+        'systemd-quotacheck', 'systemd-random-seed', 'systemd-backlight',
+        'systemd-rfkill', 'systemd-ask-password-wall', 'systemd-ask-password-console',
+        'systemd-machine-id-commit', 'systemd-journal-flush', 'systemd-journal-catalog',
+        # Netzwerk
+        'networking', 'network-manager', 'NetworkManager', 'networkd-dispatcher',
+        'ifupdown', 'resolvconf', 'isc-dhcp-client', 'isc-dhcp-server',
+        # SSH
+        'ssh', 'sshd', 'openssh-server',
+        # Logging
+        'rsyslog', 'syslog', 'syslogd', 'klogd',
+        # Cron
+        'cron', 'crond', 'anacron', 'at',
+        # Paketmanagement Debian/Ubuntu
+        'apt-daily', 'apt-daily-upgrade', 'unattended-upgrades',
+        'packagekit', 'dpkg',
+        # Systemdienste
+        'dbus', 'polkit', 'udev', 'acpid', 'apmd', 'upower',
+        'accounts-daemon', 'avahi-daemon', 'bluetooth',
+        'cups', 'cups-browsed', 'colord',
+        'pcscd', 'rtkit-daemon', 'udisks2',
+        'thermald', 'irqbalance', 'fwupd', 'fwupd-refresh',
+        'console-setup', 'keyboard-setup', 'setvtrgb',
+        'plymouth', 'plymouth-quit', 'plymouth-read-write',
+        # Boot / Init
+        'e2scrub_reap', 'e2scrub_all', 'fstrim',
+        # Cloud / VM
+        'cloud-init', 'cloud-init-local', 'cloud-final', 'cloud-config',
+        'open-vm-tools', 'vmware-tools', 'qemu-guest-agent',
+        'amazon-ssm-agent', 'amazon-cloudwatch-agent',
+        'google-startup-scripts', 'google-shutdown-scripts',
+        # Zeitdienste
+        'ntp', 'ntpd', 'chrony', 'chronyd', 'timesyncd',
+        # Diverse (Ubuntu-spezifisch)
+        'snapd', 'snap', 'multipathd', 'apport', 'whoopsie',
+        'ModemManager', 'wpa-supplicant', 'wpa_supplicant',
+    },
+    'rhel': {
+        # systemd Kern-Services
+        'systemd-journald', 'systemd-logind', 'systemd-networkd', 'systemd-resolved',
+        'systemd-timesyncd', 'systemd-udevd', 'systemd-tmpfiles-setup',
+        'systemd-tmpfiles-clean', 'systemd-update-utmp', 'systemd-modules-load',
+        'systemd-sysctl', 'systemd-remount-fs', 'systemd-random-seed',
+        # Netzwerk
+        'NetworkManager', 'network', 'firewalld', 'iptables', 'ip6tables',
+        'networkd-dispatcher',
+        # SSH
+        'sshd',
+        # Logging / Audit
+        'rsyslog', 'auditd',
+        # Cron
+        'crond', 'anacron', 'atd',
+        # Paketmanagement RHEL/CentOS
+        'yum-cron', 'dnf-makecache', 'packagekit',
+        # Systemdienste
+        'dbus', 'polkit', 'tuned', 'irqbalance', 'acpid',
+        'chronyd', 'ntpd', 'ntp', 'timesyncd',
+        'accounts-daemon', 'rtkit-daemon', 'udisks2', 'upower',
+        # Storage
+        'lvm2-monitor', 'dm-event', 'multipathd', 'mdadm',
+        'rpcbind', 'rpc-statd', 'nfs-server', 'nfs-client',
+        # SELinux
+        'selinux-autorelabel',
+        # Cloud / VM
+        'cloud-init', 'cloud-init-local', 'cloud-final', 'cloud-config',
+        'open-vm-tools', 'amazon-ssm-agent', 'amazon-cloudwatch-agent',
+        # Boot
+        'plymouth', 'plymouth-quit', 'plymouth-read-write',
+        # Zeitdienste
+        'chrony', 'chronyd',
+    },
+    'alpine': {
+        # Alpine nutzt OpenRC — meist keine .service Dateien im systemd-Format
+        'sshd', 'networking', 'crond', 'syslog', 'klogd',
+        'udev', 'mdev', 'dbus', 'acpid', 'ntpd', 'chronyd',
+        'openrc', 'local', 'bootmisc', 'hostname', 'modules',
+        'mount-ro', 'sysfs', 'devfs', 'procfs', 'loopback',
+    },
+    'arch': {
+        # systemd Kern-Services
+        'systemd-journald', 'systemd-logind', 'systemd-networkd', 'systemd-resolved',
+        'systemd-timesyncd', 'systemd-udevd', 'systemd-tmpfiles-setup',
+        'systemd-tmpfiles-clean', 'systemd-update-utmp', 'systemd-modules-load',
+        # Netzwerk
+        'NetworkManager', 'dhcpcd', 'netctl', 'networkd-dispatcher',
+        # SSH
+        'sshd',
+        # Logging
+        'rsyslog', 'syslog-ng',
+        # Cron
+        'cronie', 'fcron', 'at',
+        # Paketmanagement Arch
+        'pacman', 'reflector',
+        # Systemdienste
+        'dbus', 'polkit', 'acpid', 'upower', 'udisks2',
+        'avahi-daemon', 'bluetooth', 'cups',
+        'rtkit-daemon', 'colord',
+        'irqbalance', 'fwupd',
+        # Zeitdienste
+        'ntpd', 'chronyd', 'timesyncd',
+        # Cloud / VM
+        'cloud-init', 'open-vm-tools', 'qemu-guest-agent',
     },
 }
 
@@ -158,7 +273,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
         'sudo_users':     _read_sudo_rights(ctx.disk_image_path, primary_offset or 0, _primary_index),
         'groups_map':     _read_group_memberships(ctx.disk_image_path, primary_offset or 0, _primary_index),
         'packages':       _read_installed_packages(ctx.disk_image_path, primary_offset or 0, _primary_index, ctx.os_family),
-        'services':       _read_enabled_services(_primary_index),
+        'services':       _read_enabled_services(_primary_index, ctx.os_family),
         'ssh_config':     _read_ssh_config(ctx.disk_image_path, primary_offset or 0, _primary_index),
         'virtualization': _detect_virtualization(_primary_index),
         'usage_period':   _read_usage_period(ctx.disk_image_path, primary_offset or 0, _primary_index, ctx.os_family),
@@ -505,23 +620,56 @@ def _read_installed_packages(image_path: Path, offset: int, index: dict, os_fami
     return result
 
 
-def _read_enabled_services(index: dict) -> dict:
-    """Erkennt aktivierte systemd-Services aus *.wants/ Symlinks im Index."""
+def _read_enabled_services(index: dict, os_family: str = '') -> dict:
+    """Erkennt aktivierte Services aus dem Partition-Index.
+
+    systemd (Debian, RHEL, Arch):
+      Aktiviert = in *.wants/-Verzeichnissen verlinkte .service-Dateien.
+
+    OpenRC (Alpine):
+      Aktiviert = Einträge in etc/runlevels/default/ und etc/runlevels/boot/
+      (Symlinks auf /etc/init.d/<service>).
+
+    Vergleicht aktivierte Services gegen OS-spezifische Whitelist und
+    markiert unbekannte Services als 'non_standard' (forensisch relevant)."""
     enabled   = set()
     available = set()
-    for path in index:
-        # Aktivierte Services: in *.wants/ Verzeichnissen
-        if '.wants/' in path and path.endswith('.service'):
-            svc = path.split('/')[-1].replace('.service', '')
-            enabled.add(svc)
-        # Alle vorhandenen Services
-        elif (path.startswith('lib/systemd/system/') or
-              path.startswith('usr/lib/systemd/system/')) and path.endswith('.service'):
-            svc = path.split('/')[-1].replace('.service', '')
-            available.add(svc)
+
+    if os_family == 'alpine':
+        # ── OpenRC (Alpine) ──────────────────────────────────────────────────
+        # Aktivierte Services: Symlinks in runlevels/default/ und runlevels/boot/
+        for path in index:
+            if (path.startswith('etc/runlevels/default/') or
+                    path.startswith('etc/runlevels/boot/')):
+                svc = path.split('/')[-1]
+                if svc:
+                    enabled.add(svc)
+            # Alle vorhandenen Init-Scripts
+            elif path.startswith('etc/init.d/'):
+                svc = path.split('/')[-1]
+                if svc and not svc.startswith('.'):
+                    available.add(svc)
+    else:
+        # ── systemd (Debian, RHEL, Arch) ─────────────────────────────────────
+        for path in index:
+            # Aktivierte Services: in *.wants/ Verzeichnissen
+            if '.wants/' in path and path.endswith('.service'):
+                svc = path.split('/')[-1].replace('.service', '')
+                enabled.add(svc)
+            # Alle vorhandenen Services
+            elif (path.startswith('lib/systemd/system/') or
+                  path.startswith('usr/lib/systemd/system/')) and path.endswith('.service'):
+                svc = path.split('/')[-1].replace('.service', '')
+                available.add(svc)
+
+    # Nicht-Standard-Services: aktiviert, aber NICHT in OS-Whitelist
+    whitelist    = STANDARD_SERVICES.get(os_family, set())
+    non_standard = sorted(svc for svc in enabled if svc not in whitelist)
+
     return {
-        'enabled':   sorted(enabled),
-        'available': sorted(available - enabled),
+        'enabled':      sorted(enabled),
+        'available':    sorted(available - enabled),
+        'non_standard': non_standard,
     }
 
 
@@ -1368,8 +1516,16 @@ def _check_reboot_pending(index: dict, os_family: str = '') -> bool:
 def _read_loaded_kernel_from_logs(image_path: Path, offset: int,
                                    index: dict, os_family: str) -> str:
     """Liest tatsaechlich geladenen Kernel aus Kernel-Logs.
+
+    Strategie (Reihenfolge):
+    1. Text-Logs (kern.log / messages / syslog) via icat → direkt lesbar
+    2. Systemd Journal-Dateien (*.journal) via journalctl --file →
+       korrekte Handhabung von LZ4-komprimierten Binärdateien (systemd v230+).
+       Nur diese Option wird verwendet — kein Binary-String-Fallback,
+       da LZ4-Kompression Strings unzuverlässig macht.
+
     Multi-OS: Debian/Arch = kern.log, RHEL/Alpine = messages.
-    Suchbegriff 'Linux version X.Y.Z' ist kernel-level — ueberall gleich."""
+    Suchbegriff 'Linux version X.Y.Z' ist kernel-level — überall gleich."""
     LOG_CANDIDATES: Dict[str, List[str]] = {
         'debian': ['var/log/kern.log', 'var/log/syslog'],
         'rhel':   ['var/log/messages'],
@@ -1377,6 +1533,9 @@ def _read_loaded_kernel_from_logs(image_path: Path, offset: int,
         'arch':   ['var/log/kern.log', 'var/log/syslog'],
     }
     pattern = re.compile(r'Linux version ([a-zA-Z0-9\-\.\+]+)')
+    icat_cmd = shutil.which('icat') or 'icat'
+
+    # ── Schritt 1: Text-Logs ──────────────────────────────────────────────
     for log_path in LOG_CANDIDATES.get(os_family, ['var/log/kern.log', 'var/log/messages']):
         if log_path not in index:
             continue
@@ -1385,5 +1544,52 @@ def _read_loaded_kernel_from_logs(image_path: Path, offset: int,
             if 'Linux version' in line:
                 m = pattern.search(line)
                 if m:
+                    log.debug(f'  Kernel aus Text-Log gefunden ({log_path}): {m.group(1)}')
                     return m.group(1)
+
+    # ── Schritt 2: Systemd Journal via journalctl --file ─────────────────
+    # Nur wenn journalctl verfügbar ist (systemd-Systeme: Debian, RHEL, Arch)
+    if shutil.which('journalctl') and os_family != 'alpine':
+        journal_entries = sorted(
+            [(path, inode) for path, inode in index.items()
+             if path.startswith('var/log/journal/') and path.endswith('.journal')]
+        )
+        if journal_entries:
+            log.debug(f'  Prüfe {len(journal_entries)} Journal-Datei(en) via journalctl --file')
+        for j_path, j_inode in journal_entries[:3]:   # max. 3 Dateien prüfen
+            tmp_path: str = ''
+            try:
+                # Journal-Datei aus Image extrahieren
+                with tempfile.NamedTemporaryFile(suffix='.journal', delete=False) as tf:
+                    tmp_path = tf.name
+                res_icat = subprocess.run(
+                    [icat_cmd, '-o', str(offset), str(image_path), j_inode],
+                    capture_output=True, timeout=30
+                )
+                if res_icat.returncode != 0 or not res_icat.stdout:
+                    log.debug(f'  icat fehlgeschlagen für {j_path}')
+                    continue
+                with open(tmp_path, 'wb') as f:
+                    f.write(res_icat.stdout)
+                # journalctl --file liest LZ4-komprimierte Journals transparent
+                res_jctl = subprocess.run(
+                    ['journalctl', '--file', tmp_path,
+                     '-k', '--no-pager', '--output=short'],
+                    capture_output=True, text=True, timeout=30, errors='replace'
+                )
+                for line in res_jctl.stdout.splitlines():
+                    if 'Linux version' in line:
+                        m = pattern.search(line)
+                        if m:
+                            log.debug(f'  Kernel aus Journal gefunden ({j_path}): {m.group(1)}')
+                            return m.group(1)
+            except Exception as e:
+                log.debug(f'  journalctl --file fehlgeschlagen ({j_path}): {e}')
+            finally:
+                if tmp_path:
+                    try:
+                        Path(tmp_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
     return ''

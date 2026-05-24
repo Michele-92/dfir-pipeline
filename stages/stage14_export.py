@@ -684,15 +684,19 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     story.append(_ref(', '.join(f'/boot/config-{k}' for k in all_k[:3])))
     story.append(_spacer(4))
 
-    # ── 3. Systemd Services (Userland Anti-Forensik) ─────────────────────────
-    story.append(_h2('3. Systemd Services (Userland Anti-Forensik)'))
+    # ── 3. Systemd Services (Userland Anti-Forensik & Persistenz) ───────────
+    story.append(_h2('3. Systemd Services (Userland Anti-Forensik & Persistenz)'))
     story.append(_spacer(2))
     story.append(_zsp(
         'Systemd steuert den Lebenszyklus von Diensten. Ueber die ExecStop-Direktive '
         'koennen bei Terminierung eines Prozesses gezielt externe Userland-Tools '
-        '(z.B. sdmem) aufgerufen werden, um den Applikationsspeicher zu wipen.'
+        '(z.B. sdmem) aufgerufen werden, um den Applikationsspeicher zu wipen. '
+        'Darueber hinaus sind Dienste ausserhalb des OS-Standard-Sets ein Indikator '
+        'fuer persistente Software, Backdoors oder Angreifer-Infrastruktur.'
     ))
     story.append(_spacer(2))
+
+    # 3a: ExecStop-Wiping
     execstop_hits = [h for h in ctx.antiforensics_hits if h.get('type') == 'execstop_wiping']
     if execstop_hits:
         story.append(_befund_pos(
@@ -705,6 +709,27 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
             'Die Ueberpruefung der relevanten Service-Units ergab keine Aufrufe von '
             'externen Speicher-Wiping-Tools bei Prozessterminierungen. '
             'Verdaechtige ExecStop-Direktiven liegen nicht vor.'
+        ))
+    story.append(_spacer(2))
+
+    # 3b: Non-Standard Services
+    _primary_pf_af = next((p for p in ctx.partition_profiles if p.get('is_primary')), {})
+    _svc_af        = _primary_pf_af.get('services', {})
+    _non_std_af    = _svc_af.get('non_standard', [])
+    if _non_std_af:
+        ns_str_af = ', '.join(_non_std_af[:12])
+        if len(_non_std_af) > 12:
+            ns_str_af += f' (+{len(_non_std_af) - 12} weitere)'
+        story.append(_befund_pos(
+            f'{len(_non_std_af)} Nicht-Standard-Service(s) wurden aktiviert vorgefunden, '
+            f'die nicht zum erwarteten Standard-Set der OS-Familie gehoeren: {ns_str_af}. '
+            f'Diese Dienste sind manuell auf Legitimitaet und potenzielle Persistenz-Mechanismen '
+            f'zu pruefen.'
+        ))
+    else:
+        story.append(_befund_neg(
+            'Alle aktivierten systemd-Services entsprechen dem erwarteten Standard-Set der '
+            'erkannten OS-Familie. Es wurden keine nicht-standardmaessigen Dienste vorgefunden.'
         ))
     story.append(_spacer(2))
     story.append(_ref(
@@ -772,7 +797,9 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
         ))
     story.append(_spacer(2))
     story.append(_ref(
-        '/boot/grub/grub.cfg, /var/run/reboot-required, /var/log/kern.log'
+        '/boot/grub/grub.cfg, /var/run/reboot-required, '
+        '/var/log/kern.log, /var/log/messages, /var/log/journal/*.journal '
+        '(via journalctl --file, inkl. LZ4-komprimierte Journals)'
     ))
     story.append(PageBreak())
 
@@ -907,20 +934,55 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     # ── Seite 7: System-Profiling ─────────────────────────────────────────────
     story.append(_h1('System-Profiling'))
     story.append(_spacer(4))
+    loaded_k_s7      = getattr(ctx, 'loaded_kernel_from_logs', '') or '-'
+    all_kernels_s7   = getattr(ctx, 'all_kernel_versions', [])
     kv3 = [
-        ['OS-Familie',      ctx.os_family or '-'],
-        ['OS-Name',         ctx.os_name or '-'],
-        ['Kernel (aktiv)',  ctx.kernel_version or '-'],
-        ['Alle Kernel',     ', '.join(getattr(ctx, 'all_kernel_versions', [])) or '-'],
-        ['Hostname',        ctx.hostname or '-'],
-        ['Zeitzone',        ctx.timezone],
-        ['Image-Format',    ctx.file_type],
-        ['Image-Groesse',   f'{ctx.file_size_gb:.2f} GB'],
-        ['SHA256',          ctx.sha256],
-        ['MD5',             ctx.md5],
-        ['Virtualisierung', primary_profile.get('virtualization', '-')],
+        ['OS-Familie',               ctx.os_family or '-'],
+        ['OS-Name',                  ctx.os_name or '-'],
+        ['Kernel (target-query)',    ctx.kernel_version or '-'],
+        ['Kernel (geladen, Logs)',   loaded_k_s7],
+        ['Alle installierten Kernel', ', '.join(all_kernels_s7) or '-'],
+        ['Hostname',                 ctx.hostname or '-'],
+        ['Zeitzone',                 ctx.timezone],
+        ['Image-Format',             ctx.file_type],
+        ['Image-Groesse',            f'{ctx.file_size_gb:.2f} GB'],
+        ['SHA256',                   ctx.sha256],
+        ['MD5',                      ctx.md5],
+        ['Virtualisierung',          primary_profile.get('virtualization', '-')],
     ]
     story.append(_kv_table(kv3, W, _rl_color))
+    story.append(_spacer(4))
+
+    # Non-Standard Services — forensisch relevante Persistenz-Hinweise
+    _svc_s7       = primary_profile.get('services', {})
+    _non_std_s7   = _svc_s7.get('non_standard', [])
+    _enabled_s7   = _svc_s7.get('enabled', [])
+    story.append(_h2('Aktivierte Services'))
+    story.append(_spacer(2))
+    if _enabled_s7:
+        story.append(_body(
+            f'Aktivierte systemd-Services ({len(_enabled_s7)} gesamt): '
+            f'{", ".join(_enabled_s7[:12])}'
+            + (f' (+{len(_enabled_s7) - 12} weitere)' if len(_enabled_s7) > 12 else '')
+        ))
+    else:
+        story.append(_body('Keine aktivierten Services erkannt (ggf. OpenRC-System).'))
+    story.append(_spacer(2))
+    if _non_std_s7:
+        ns_str = ', '.join(_non_std_s7[:15])
+        if len(_non_std_s7) > 15:
+            ns_str += f' (+{len(_non_std_s7) - 15} weitere)'
+        story.append(_body(
+            f'⚠ {len(_non_std_s7)} Nicht-Standard-Service(s) erkannt '
+            f'(nicht in OS-Whitelist): {ns_str}. '
+            f'Diese Dienste koennen auf Persistenz, Backdoors oder installierte '
+            f'Drittanbieter-Software hinweisen und sind forensisch zu pruefen.'
+        ))
+    else:
+        story.append(_body(
+            'Alle aktivierten Services entsprechen dem erwarteten Standard-Set '
+            'der erkannten OS-Familie. Es wurden keine abweichenden Dienste festgestellt.'
+        ))
     story.append(PageBreak())
 
     # ══ ANHANG ════════════════════════════════════════════════════════════════
