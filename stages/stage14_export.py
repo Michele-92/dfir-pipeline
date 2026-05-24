@@ -1148,38 +1148,56 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
         story.append(bc_box)
         story.append(_spacer(4))
 
-        # Tabelle: alle Checks
-        bc_rows = [['Service / Log', 'Pfad', 'Erwartet', 'Gefunden', 'Anomalie']]
+        # Tabelle: alle Checks — manuell gebaut damit Anomalie-Farben
+        # in einem setStyle()-Aufruf gesetzt werden koennen (kein ._style-Zugriff).
+        from reportlab.platypus import Table as _BCT, TableStyle as _BCTS
+        from reportlab.lib.styles import ParagraphStyle as _BCPS
+        _bc_col_w = [35*mm, 52*mm, 18*mm, 18*mm, 47*mm]
+        _bc_hs = _BCPS('bc_h', fontSize=8, fontName='Helvetica-Bold',
+                        textColor=_rl_color_from_tuple(C_WHITE), leading=11)
+        _bc_cs = _BCPS('bc_c', fontSize=8, fontName='Helvetica',
+                        textColor=_rl_color_from_tuple(C_DARK_GREY), leading=11)
+
+        bc_header = ['Service / Log', 'Pfad', 'Erwartet', 'Gefunden', 'Anomalie']
+        bc_data   = [[Paragraph(str(h), _bc_hs) for h in bc_header]]
         for c in _bc:
             erw_txt  = 'Pflicht' if c.get('expected') else 'Bedingt'
             gef_txt  = '✅ Ja'   if c.get('found')    else '❌ Nein'
             anom_txt = c.get('anomaly', '') or '—'
-            bc_rows.append([
-                c.get('service',  '—'),
-                c.get('log_path', '—'),
-                erw_txt,
-                gef_txt,
-                anom_txt[:80],
+            bc_data.append([
+                Paragraph(c.get('service',  '—'),      _bc_cs),
+                Paragraph(c.get('log_path', '—'),      _bc_cs),
+                Paragraph(erw_txt,                      _bc_cs),
+                Paragraph(gef_txt,                      _bc_cs),
+                Paragraph(anom_txt[:80],                _bc_cs),
             ])
-        bc_tbl = _table(bc_rows, [35*mm, 52*mm, 18*mm, 18*mm, 47*mm])
 
-        # Anomalie-Zeilen rot/orange hervorheben
-        from reportlab.platypus import TableStyle as _BCTS
-        extra_cmds = []
+        # Alle Style-Commands auf einmal — Basis + Anomalie-Farben
+        bc_style_cmds = [
+            ('BACKGROUND',    (0, 0), (-1, 0),  _rl_color_from_tuple(C_DARK_BLUE)),
+            ('ROWBACKGROUNDS',(0, 1), (-1, -1),
+             [_rl_color_from_tuple(C_WHITE), _rl_color_from_tuple(C_LIGHT_GREY)]),
+            ('GRID',          (0, 0), (-1, -1), 0.3, _rl_color_from_tuple((0xDD/255,)*3)),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 6),
+            ('TOPPADDING',    (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ]
         for i, c in enumerate(_bc, 1):   # i=1: erste Datenzeile (0 = Header)
             atype = c.get('anomaly_type', '')
             if atype == 'mandatory_missing':
-                extra_cmds += [
+                bc_style_cmds += [
                     ('BACKGROUND', (0, i), (-1, i), _rl_color_from_tuple(C_RED_L)),
                     ('TEXTCOLOR',  (0, i), (-1, i), _rl_color_from_tuple(C_RED)),
                 ]
             elif atype in ('install_without_log', 'log_without_install'):
-                extra_cmds += [
+                bc_style_cmds += [
                     ('BACKGROUND', (0, i), (-1, i), _rl_color_from_tuple(C_ORANGE_L)),
                     ('TEXTCOLOR',  (0, i), (-1, i), _rl_color_from_tuple(C_ORANGE)),
                 ]
-        if extra_cmds:
-            bc_tbl.setStyle(_BCTS(bc_tbl._style._cmds + extra_cmds))
+        bc_tbl = _BCT(bc_data, colWidths=_bc_col_w, repeatRows=1)
+        bc_tbl.setStyle(_BCTS(bc_style_cmds))
         story.append(bc_tbl)
 
         # Legende
