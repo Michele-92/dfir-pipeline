@@ -106,7 +106,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
     ctx.ip_addresses  = _read_ip_addresses(ctx.disk_image_path)
     ctx.network_config= _read_field(ctx.disk_image_path, 'interfaces')
 
-    # User-Profiling
+    # User-Profiling — Primärquelle: target-query (ganzes Image)
     ctx.users, ctx.shadow_mtime, ctx.notable_users, ctx.unexpected_users = \
         _profile_users(ctx.disk_image_path, ctx.os_family)
 
@@ -114,6 +114,26 @@ def run(ctx: PipelineContext) -> PipelineContext:
     primary_offset = ctx.primary_partition.get('offset') if ctx.primary_partition else None
 
     _primary_index = _index_partition(ctx.disk_image_path, primary_offset) if primary_offset else {}
+
+    # TSK-Fallback für Nutzer: falls target-query keine Nutzer liefert,
+    # /etc/passwd direkt via TSK/icat lesen (gleiche Logik wie Sekundärpartitionen)
+    if not ctx.users and 'etc/passwd' in _primary_index and primary_offset is not None:
+        log.info('  Nutzer-Fallback: target-query leer → lese /etc/passwd via TSK')
+        raw_passwd = _read_icat(ctx.disk_image_path, primary_offset,
+                                _primary_index['etc/passwd'])
+        if raw_passwd:
+            ctx.users = _parse_users(raw_passwd, ctx.os_family)
+            creation_times = _read_user_creation_times(
+                ctx.disk_image_path, primary_offset, _primary_index
+            )
+            for u in ctx.users:
+                u['created_at'] = creation_times.get(u['name'], '')
+            ctx.notable_users   = [u['name'] for u in ctx.users
+                                   if not u.get('is_system', True)
+                                   and u.get('login_allowed', False)]
+            ctx.unexpected_users = [u['name'] for u in ctx.users
+                                    if u.get('is_unexpected', False)]
+            log.info(f'  TSK-Fallback: {len(ctx.users)} Nutzer aus /etc/passwd gelesen')
     primary_profile = {
         'is_primary':       True,
         'partition_index':  ctx.primary_partition.get('index', '?') if ctx.primary_partition else '?',
@@ -274,16 +294,26 @@ def _read_icat(image_path: Path, offset: int, inode: str) -> str:
 
 
 def _read_shadow_mtime_tsk(image_path: Path, offset: int, inode: str) -> str:
-    """Liest Modifikationszeit von /etc/shadow via istat."""
+    """Liest Modifikationszeit einer Datei via istat.
+
+    Unterstützt beide TSK-Ausgabeformate:
+      Alte TSK: 'Modified:       Thu Mar 12 00:17:01 2020'  (Wert auf gleicher Zeile)
+      Neue TSK: 'Modified:'  + nächste Zeile: '2020-03-12 00:17:01 (UTC)'
+    """
     istat_cmd = shutil.which('istat') or 'istat'
     try:
         res = subprocess.run(
             [istat_cmd, '-o', str(offset), str(image_path), inode],
             capture_output=True, text=True, timeout=10, errors='replace'
         )
-        for line in res.stdout.splitlines():
+        lines = res.stdout.splitlines()
+        for i, line in enumerate(lines):
             if line.strip().lower().startswith('modified:'):
-                return line.split(':', 1)[1].strip()
+                value = line.split(':', 1)[1].strip()
+                if value:
+                    return value                      # altes Format: Wert auf gleicher Zeile
+                elif i + 1 < len(lines):
+                    return lines[i + 1].strip()       # neues Format: Wert auf nächster Zeile
     except Exception:
         pass
     return ''
@@ -683,30 +713,37 @@ def _read_usage_period(image_path: Path, offset: int, index: dict, os_family: st
     for log_path in expanded:
         if log_path not in index:
             continue
-        # Erste Aktivität: nur Anfang der Datei lesen
-        content_start = _read_icat(image_path, offset, index[log_path])
-        if not content_start:
+        # Gesamten Log-Inhalt lesen — alle Timestamps extrahieren
+        # (nur erste 50 Zeilen wäre unzuverlässig: letzte Aktivität könnte
+        #  in der Mitte der Datei liegen wenn danach kein Timestamp mehr kommt)
+        content = _read_icat(image_path, offset, index[log_path])
+        if not content:
             continue
-        # Ersten Zeitstempel aus den ersten Zeilen extrahieren
-        for line in content_start.splitlines()[:50]:
+
+        all_ts_in_file: list = []
+        for line in content.splitlines():
             for pat in TS_PATTERNS:
                 m = pat.search(line)
                 if m:
-                    all_first.append((m.group(1), log_path))
+                    all_ts_in_file.append(m.group(1))
                     break
-            else:
-                continue
-            break
-        # Letzte Aktivität: mtime via istat (append-only → mtime = letzter Eintrag)
-        mtime = _read_shadow_mtime_tsk(image_path, offset, index[log_path])
-        # Nur die ersten 19 Zeichen (YYYY-MM-DD HH:MM:SS) für ISO-Vergleich nutzen
-        mtime_cmp = mtime[:19] if mtime else ''
-        curr_cmp  = result['last_activity'][:19] if result['last_activity'] else ''
-        if mtime_cmp and (not curr_cmp or mtime_cmp > curr_cmp):
-            result['last_activity'] = mtime
+
+        if not all_ts_in_file:
+            continue
+
+        # Erster Timestamp dieser Datei → Kandidat für erste Aktivität
+        all_first.append((all_ts_in_file[0], log_path))
+
+        # Letzter Timestamp dieser Datei → Kandidat für letzte Aktivität
+        last_ts  = all_ts_in_file[-1]
+        curr_cmp = result['last_activity'][:19] if result['last_activity'] else ''
+        if not curr_cmp or last_ts[:19] > curr_cmp:
+            result['last_activity'] = last_ts
+            if not result['source']:
+                result['source'] = log_path
 
     if all_first:
-        # Minimum = frühester bekannter Log-Eintrag
+        # Minimum = frühester bekannter Log-Eintrag über alle Log-Dateien
         all_first.sort(key=lambda x: x[0])
         result['first_activity'] = all_first[0][0]
         result['source']         = all_first[0][1]
@@ -838,13 +875,31 @@ def _read_install_time(image_path: Path, offset: int, index: dict, os_family: st
                         return m.group(1).replace('T', ' ')
                     break
 
-    # Quelle 2: istat auf /etc/machine-id (generiert beim ersten Boot)
+    # Quelle 2 (Alpine): APK-Paketdatenbank /var/lib/apk/db/installed
+    # Enthält 't:<unix-timestamp>' pro Paket — ältester Timestamp = Installationszeitpunkt
+    if os_family == 'alpine' and 'var/lib/apk/db/installed' in index:
+        content = _read_icat(image_path, offset, index['var/lib/apk/db/installed'])
+        if content:
+            timestamps = []
+            for line in content.splitlines():
+                line = line.strip()
+                if line.startswith('t:') and line[2:].isdigit():
+                    timestamps.append(int(line[2:]))
+            if timestamps:
+                oldest = min(timestamps)
+                try:
+                    dt = datetime.fromtimestamp(oldest, tz=timezone.utc)
+                    return dt.strftime('%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    pass
+
+    # Quelle 3: istat auf /etc/machine-id (generiert beim ersten Boot)
     if 'etc/machine-id' in index:
         mtime = _read_shadow_mtime_tsk(image_path, offset, index['etc/machine-id'])
         if mtime:
             return mtime
 
-    # Quelle 3: istat auf /etc/hostname
+    # Quelle 4: istat auf /etc/hostname
     if 'etc/hostname' in index:
         mtime = _read_shadow_mtime_tsk(image_path, offset, index['etc/hostname'])
         if mtime:

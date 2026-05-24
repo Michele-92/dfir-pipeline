@@ -51,7 +51,10 @@ def run(ctx: PipelineContext) -> PipelineContext:
         role     = _detect_role(fs_type, size_mb)
         os_name, os_family = '', ''
 
-        if fs_type in ANALYSABLE_FS and role not in SKIP_ROLES:
+        # OS-Erkennung nur für ROOT/DATA-Partitionen — target-query arbeitet
+        # ohne Offset auf dem ganzen Image und würde sonst das OS der primären
+        # Partition fälschlicherweise auch BOOT/EFI-Partitionen zuweisen.
+        if fs_type in ANALYSABLE_FS and role == 'ROOT/DATA':
             os_name, os_family = _detect_os(ctx.disk_image_path, offset)
 
         tool, tool_reason = _suggest_tool(fs_type)
