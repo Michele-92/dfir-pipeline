@@ -296,7 +296,8 @@ def _cross_reference_stage9(
             if (finding.rule in ('activity_burst_system_path', 'deleted_system_file') and
                     hit_type == 'rootkit_indicator'):
                 finding.severity = 'CRITICAL'
-                finding.description += ' [Rootkit-Indikator von Stage 9 bestätigt]'
+                if '[Rootkit-Indikator von Stage 9 bestätigt]' not in finding.description:
+                    finding.description += ' [Rootkit-Indikator von Stage 9 bestätigt]'
 
     return findings
 
