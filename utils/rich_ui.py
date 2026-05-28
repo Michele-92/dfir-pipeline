@@ -27,6 +27,7 @@ STAGE_INFO = {
     'stage_07':   ('07',    'IOC-Extraktion'),
     'stage_08':   ('08',    'Datennormalisierung'),
     'stage_09':   ('09',    'Anti-Forensics-Erkennung'),
+    'stage_8.5':  ('8.5',  'Forensische Timeline-Analyse'),
     'stage_13':   ('13',    'Qualitätsprüfung'),
     'stage_14':   ('14',    'Export & Archivierung'),
 }
@@ -721,6 +722,66 @@ class PipelineUI:
         console.print(Panel(t,
             title='[bold cyan]Stage 09 — Anti-Forensics[/bold cyan]',
             border_style='cyan', padding=(0, 1)))
+
+    def show_stage85_detail(self, ctx) -> None:
+        findings = getattr(ctx, 'forensic_findings', None) or []
+
+        SEV_ICON  = {'CRITICAL': '🔴', 'HIGH': '🟠', 'MEDIUM': '🟡', 'LOW': '🟢'}
+        SEV_COLOR = {'CRITICAL': 'red', 'HIGH': 'orange3', 'MEDIUM': 'yellow', 'LOW': 'green'}
+
+        t = Table(box=box.ROUNDED, show_header=False, border_style='cyan', expand=True)
+        t.add_column('Feld', style='bold', min_width=28)
+        t.add_column('Wert', style='white')
+
+        if not findings:
+            t.add_row('Befunde gesamt', Text('0 — keine Anomalien gefunden', style='green'))
+        else:
+            from collections import Counter
+            sev_counts  = Counter(f.severity for f in findings)
+            rule_counts = Counter(f.rule for f in findings)
+
+            t.add_row('Befunde gesamt', Text(f'{len(findings):,}', style='bold'))
+            t.add_row('', '')
+
+            # Severity-Übersicht
+            for sev in ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW'):
+                cnt = sev_counts.get(sev, 0)
+                if cnt:
+                    icon  = SEV_ICON.get(sev, '🔵')
+                    color = SEV_COLOR.get(sev, 'white')
+                    t.add_row(f'  {icon}  {sev}', Text(f'{cnt:,}', style=color))
+
+            t.add_row('', '')
+
+            # Top-5 Befunde
+            top = findings[:5]
+            for i, f in enumerate(top, 1):
+                icon  = SEV_ICON.get(f.severity, '🔵')
+                color = SEV_COLOR.get(f.severity, 'white')
+                t.add_row(
+                    Text(f'  {i}.  {icon}  {f.rule}', style='bold'),
+                    Text(f'[{f.severity}]', style=color),
+                )
+                t.add_row(
+                    Text('      Datei',   style='dim'),
+                    Text(f.file[:90],    style='dim'),
+                )
+                t.add_row(
+                    Text('      Befund',  style='dim'),
+                    Text(f.description[:110], style=color),
+                )
+                if i < len(top):
+                    t.add_row('', '')
+
+            t.add_row('', '')
+            t.add_row('Ausgabe', 'forensic_findings.csv + forensic_findings.xlsx')
+
+        console.print(Panel(
+            t,
+            title='[bold cyan]Stage 8.5 — Forensische Timeline-Analyse[/bold cyan]',
+            border_style='cyan',
+            padding=(0, 1),
+        ))
 
     def show_stage12_detail(self, ctx) -> None:
         t = Table(box=box.ROUNDED, show_header=False, border_style='cyan', expand=True)

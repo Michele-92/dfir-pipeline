@@ -167,6 +167,7 @@ def main():
         ui.show_stage09_detail(ctx)
 
         ctx = run_stage(stage_timeline_analysis.run, ctx, 'stage_8.5', ui)
+        ui.show_stage85_detail(ctx)
 
         # ctx = run_stage(stage10_ml.run,            ctx, 'stage_10',   ui)
         # ctx = run_stage(stage11_mitre.run,         ctx, 'stage_11',   ui)
