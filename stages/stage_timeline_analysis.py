@@ -67,12 +67,6 @@ def run(ctx: PipelineContext) -> PipelineContext:
     for f in findings:
         if f.anomaly_time:
             f.evidence = _get_stage6_context(ctx.events_db_path, f.anomaly_time)
-            # DIAGNOSE: zeigt wie viele Kontext-Zeilen pro Finding gefunden wurden
-            log.warning(
-                f'  [DIAGNOSE] {f.severity} {f.rule} | '
-                f'anomaly_time={f.anomaly_time} (tzinfo={f.anomaly_time.tzinfo}) | '
-                f'evidence={len(f.evidence)} Zeilen'
-            )
 
     # Nach Schwere sortieren
     order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2}
@@ -120,20 +114,47 @@ def _build_mactime_index(db_path: Path) -> Dict[str, Dict[str, Optional[datetime
 
 # ── Schritt 2: Anomalie-Regeln ───────────────────────────────────────────────
 
+# Pfade bei denen M < B wirklich verdächtig ist (Staging/User-Bereich)
+_MB_SUSPICIOUS = ['/tmp/', '/dev/shm/', '/var/tmp/', '/home/', '/root/', '/run/user/']
+# Pfade bei denen M < B fast immer dpkg/apt ist → ignorieren
+_MB_TRUSTED    = ['/usr/', '/bin/', '/sbin/', '/lib/', '/usr/lib/',
+                  '/usr/bin/', '/usr/sbin/', '/usr/share/']
+
+
 def _check_macb_anomalies(index: Dict) -> List[ForensicFinding]:
     findings = []
     for fpath, ts in index.items():
         M, B, C = ts.get('M'), ts.get('B'), ts.get('C')
 
-        # Regel: M < B (Modified vor Born — physikalisch unmöglich)
+        # Regel: M < B (Modified vor Born)
+        # Pfad-Heuristik: dpkg setzt mtime auf Build-Datum → in Systempfaden normal
         if M and B and M < B:
-            findings.append(ForensicFinding(
-                severity='CRITICAL',
-                rule='timestomping_M_lt_B',
-                file=fpath,
-                description=f'Modified ({M}) liegt VOR Born ({B}) — Timestamp-Manipulation',
-                anomaly_time=M,
-            ))
+            in_suspicious = any(fpath.startswith(p) for p in _MB_SUSPICIOUS)
+            in_trusted    = any(fpath.startswith(p) for p in _MB_TRUSTED)
+            if in_suspicious:
+                findings.append(ForensicFinding(
+                    severity='CRITICAL',
+                    rule='timestomping_M_lt_B',
+                    file=fpath,
+                    description=(
+                        f'Modified ({M:%Y-%m-%d %H:%M}) liegt VOR Born ({B:%Y-%m-%d %H:%M}) '
+                        f'in Verdachtspfad — Timestamp-Manipulation'
+                    ),
+                    anomaly_time=M,
+                ))
+            elif not in_trusted:
+                # /opt/, /srv/, /var/ etc. — könnte rsync/tar sein, prüfenswert
+                findings.append(ForensicFinding(
+                    severity='HIGH',
+                    rule='timestomping_M_lt_B',
+                    file=fpath,
+                    description=(
+                        f'Modified ({M:%Y-%m-%d %H:%M}) liegt VOR Born ({B:%Y-%m-%d %H:%M}) '
+                        f'— möglicherweise rsync/tar oder Manipulation'
+                    ),
+                    anomaly_time=M,
+                ))
+            # in_trusted (/usr/, /bin/ etc.) → dpkg-Verhalten → kein Finding
 
         # Regel: C >> M (ctime viel neuer als mtime → touch -t verwendet)
         if M and C and (C - M) > timedelta(hours=1):

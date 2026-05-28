@@ -48,6 +48,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
     _write_antiforensics_json(ctx, case_dir)
     _write_activity_csv(ctx, case_dir)
     _export_mactime_package(ctx, case_dir)
+    _export_forensic_findings_csv(ctx, case_dir)
+    _export_forensic_findings_excel(ctx, case_dir)
     _generate_report_pdf(ctx, case_dir)
     _generate_coc_pdf(ctx, case_dir)
     _generate_critical_report(ctx, case_dir)
@@ -298,6 +300,155 @@ def _export_mactime_package(ctx: PipelineContext, case_dir: Path) -> None:
                 ])
                 count += 1
     log.info(f'  filesystem_timeline.csv → {out}  ({count:,} MACtime-Events)')
+
+
+# ── Forensic Findings CSV ────────────────────────────────────────────────────
+
+def _export_forensic_findings_csv(ctx: PipelineContext, case_dir: Path) -> None:
+    """Exportiert Stage-8.5-Befunde als forensic_findings.csv."""
+    findings = getattr(ctx, 'forensic_findings', None)
+    if not findings:
+        return
+    out = case_dir / 'forensic_findings.csv'
+    with open(out, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            'Timestamp_UTC', 'Severity', 'Check_Type',
+            'Datei', 'Befund', 'Kontext_Stage6',
+        ])
+        for finding in findings:
+            ts_str = (
+                finding.anomaly_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                if finding.anomaly_time else ''
+            )
+            evidence_str = ' | '.join(
+                f"{e.get('time','')} [{e.get('source','')}] {e.get('message','')[:80]}"
+                for e in (finding.evidence or [])[:3]
+            )
+            writer.writerow([
+                ts_str,
+                finding.severity,
+                finding.rule,
+                finding.file,
+                finding.description,
+                evidence_str,
+            ])
+    log.info(f'  forensic_findings.csv → {out}  ({len(findings)} Befunde)')
+
+
+# ── Forensic Findings Excel ──────────────────────────────────────────────────
+
+def _export_forensic_findings_excel(ctx: PipelineContext, case_dir: Path) -> None:
+    """Exportiert Stage-8.5-Befunde als farbkodiertes Excel mit Summary-Sheet."""
+    findings = getattr(ctx, 'forensic_findings', None)
+    if not findings:
+        return
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment
+        from openpyxl.utils import get_column_letter
+        from collections import Counter
+    except ImportError:
+        log.warning('openpyxl nicht installiert — Excel-Export übersprungen')
+        return
+
+    # Farb-Definitionen (ARGB ohne Alpha-Prefix → RRGGBB)
+    FILL_HEADER   = PatternFill(fill_type='solid', fgColor='1F4E79')
+    FILL_CRITICAL = PatternFill(fill_type='solid', fgColor='FFCCCC')
+    FILL_HIGH     = PatternFill(fill_type='solid', fgColor='FCE4D6')
+    FILL_MEDIUM   = PatternFill(fill_type='solid', fgColor='FFEB9C')
+    FILL_LOW      = PatternFill(fill_type='solid', fgColor='E2EFDA')
+    SEV_FILL = {
+        'CRITICAL': FILL_CRITICAL,
+        'HIGH':     FILL_HIGH,
+        'MEDIUM':   FILL_MEDIUM,
+        'LOW':      FILL_LOW,
+    }
+
+    wb = Workbook()
+
+    # ── Sheet 1: Forensic Findings ──────────────────────────────
+    ws = wb.active
+    ws.title = 'Forensic Findings'
+
+    headers = [
+        'Timestamp_UTC', 'Severity', 'Check_Type',
+        'Datei', 'Befund', 'Kontext_Stage6',
+    ]
+    col_widths = [22, 10, 32, 45, 70, 80]
+
+    for col, (header, width) in enumerate(zip(headers, col_widths), 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font      = Font(bold=True, color='FFFFFF', size=11)
+        cell.fill      = FILL_HEADER
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        ws.column_dimensions[get_column_letter(col)].width = width
+    ws.row_dimensions[1].height = 22
+
+    for row_idx, f in enumerate(findings, 2):
+        ts_str = (
+            f.anomaly_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+            if f.anomaly_time else ''
+        )
+        evidence_str = ' | '.join(
+            f"{e.get('time','')} [{e.get('source','')}] {e.get('message','')[:80]}"
+            for e in (f.evidence or [])[:3]
+        )
+        values = [ts_str, f.severity, f.rule, f.file, f.description, evidence_str]
+        fill   = SEV_FILL.get(f.severity, FILL_LOW)
+
+        for col, val in enumerate(values, 1):
+            cell           = ws.cell(row=row_idx, column=col, value=val)
+            cell.fill      = fill
+            cell.alignment = Alignment(wrap_text=True, vertical='top')
+        ws.row_dimensions[row_idx].height = 42
+
+    # Eingefrorene Kopfzeile + Auto-Filter
+    ws.freeze_panes = 'A2'
+    ws.auto_filter.ref = (
+        f'A1:{get_column_letter(len(headers))}{len(findings) + 1}'
+    )
+
+    # ── Sheet 2: Summary ─────────────────────────────────────────
+    ws2 = wb.create_sheet('Summary')
+    ws2.column_dimensions['A'].width = 35
+    ws2.column_dimensions['B'].width = 12
+
+    title_cell = ws2.cell(1, 1, 'DFIR Forensic Findings — Zusammenfassung')
+    title_cell.font = Font(bold=True, size=14, color='1F4E79')
+    ws2.cell(2, 1, f'Generiert: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}')
+
+    # Severity-Tabelle
+    ws2.cell(4, 1, 'Severity').font  = Font(bold=True, color='FFFFFF')
+    ws2.cell(4, 1).fill              = FILL_HEADER
+    ws2.cell(4, 2, 'Anzahl').font   = Font(bold=True, color='FFFFFF')
+    ws2.cell(4, 2).fill             = FILL_HEADER
+
+    sev_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
+    sev_counts = Counter(f.severity for f in findings)
+    for i, (sev, cnt) in enumerate(
+        sorted(sev_counts.items(), key=lambda x: sev_order.get(x[0], 9)), 5
+    ):
+        ws2.cell(i, 1, sev).fill  = SEV_FILL.get(sev, FILL_LOW)
+        ws2.cell(i, 2, cnt).fill  = SEV_FILL.get(sev, FILL_LOW)
+
+    # Check-Typ-Tabelle
+    sep = 5 + len(sev_counts) + 1
+    ws2.cell(sep, 1, 'Check-Typ').font  = Font(bold=True, color='FFFFFF')
+    ws2.cell(sep, 1).fill               = FILL_HEADER
+    ws2.cell(sep, 2, 'Anzahl').font    = Font(bold=True, color='FFFFFF')
+    ws2.cell(sep, 2).fill              = FILL_HEADER
+
+    rule_counts = Counter(f.rule for f in findings)
+    for i, (rule, cnt) in enumerate(
+        sorted(rule_counts.items(), key=lambda x: -x[1]), sep + 1
+    ):
+        ws2.cell(i, 1, rule)
+        ws2.cell(i, 2, cnt)
+
+    out = case_dir / 'forensic_findings.xlsx'
+    wb.save(str(out))
+    log.info(f'  forensic_findings.xlsx → {out}  ({len(findings)} Befunde)')
 
 
 # ── PDF Report ───────────────────────────────────────────────────────────────
