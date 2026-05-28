@@ -339,112 +339,201 @@ def _export_forensic_findings_csv(ctx: PipelineContext, case_dir: Path) -> None:
 # ── Forensic Findings Excel ──────────────────────────────────────────────────
 
 def _export_forensic_findings_excel(ctx: PipelineContext, case_dir: Path) -> None:
-    """Exportiert Stage-8.5-Befunde als farbkodiertes Excel mit Summary-Sheet."""
+    """Exportiert Stage-8.5-Befunde als gestyltes Excel (Style-Guide v2)."""
     findings = getattr(ctx, 'forensic_findings', None)
     if not findings:
         return
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import PatternFill, Font, Alignment
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
         from openpyxl.utils import get_column_letter
-        from collections import Counter
     except ImportError:
         log.warning('openpyxl nicht installiert — Excel-Export übersprungen')
         return
 
-    # Farb-Definitionen (ARGB ohne Alpha-Prefix → RRGGBB)
-    FILL_HEADER   = PatternFill(fill_type='solid', fgColor='1F4E79')
-    FILL_CRITICAL = PatternFill(fill_type='solid', fgColor='FFCCCC')
-    FILL_HIGH     = PatternFill(fill_type='solid', fgColor='FCE4D6')
-    FILL_MEDIUM   = PatternFill(fill_type='solid', fgColor='FFEB9C')
-    FILL_LOW      = PatternFill(fill_type='solid', fgColor='E2EFDA')
-    SEV_FILL = {
-        'CRITICAL': FILL_CRITICAL,
-        'HIGH':     FILL_HIGH,
-        'MEDIUM':   FILL_MEDIUM,
-        'LOW':      FILL_LOW,
+    # ── Style-Helfer ─────────────────────────────────────────────
+    def _fill(hex6):
+        return PatternFill(fill_type='solid', fgColor=hex6.lstrip('#'))
+
+    def _font(bold=False, color='000000', size=9):
+        return Font(name='Arial', bold=bold, color=color.lstrip('#'), size=size)
+
+    def _align(h='left', v='top', wrap=False):
+        return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
+
+    _side   = Side(style='thin', color='C8D5E8')
+    _BORDER = Border(left=_side, right=_side, top=_side, bottom=_side)
+
+    # Fills
+    F_BANNER = _fill('0D1B2A')
+    F_HEADER = _fill('1B3A5C')
+    F_W      = _fill('FFFFFF')
+    F_ALT    = _fill('F2F5F9')
+
+    # Zeilen-Hintergrund alternierend nach Severity
+    ROW_BG = {
+        'CRITICAL': [_fill('FFF5F5'), _fill('FFEDED')],
+        'HIGH':     [_fill('FFFBF0'), _fill('FFF4DC')],
+        'MEDIUM':   [_fill('FAFCFF'), _fill('F2F7FF')],
+        'LOW':      [F_W, F_ALT],
+    }
+    # Severity-Badge (zentriert, fett, weiß)
+    BADGE = {
+        'CRITICAL': _fill('A32D2D'),
+        'HIGH':     _fill('BA7517'),
+        'MEDIUM':   _fill('5F5E5A'),
+        'LOW':      _fill('3A6B3A'),
     }
 
-    wb = Workbook()
+    # Sortierung: CRITICAL → HIGH → MEDIUM → LOW, dann Timestamp aufsteigend
+    _sev_ord = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
+    sorted_f = sorted(findings, key=lambda f: (
+        _sev_ord.get(f.severity, 4),
+        f.anomaly_time or datetime.min.replace(tzinfo=timezone.utc),
+    ))
 
-    # ── Sheet 1: Forensic Findings ──────────────────────────────
-    ws = wb.active
-    ws.title = 'Forensic Findings'
+    wb  = Workbook()
+    HDR = ['Timestamp_UTC', 'Severity', 'Check_Type', 'Datei', 'Befund', 'Kontext_Stage6']
+    WID = [22, 12, 28, 40, 55, 60]
+    NC  = len(HDR)
+    LC  = get_column_letter(NC)
 
-    headers = [
-        'Timestamp_UTC', 'Severity', 'Check_Type',
-        'Datei', 'Befund', 'Kontext_Stage6',
-    ]
-    col_widths = [22, 10, 32, 45, 70, 80]
+    # ── Sheet 1: Findings ────────────────────────────────────────
+    ws          = wb.active
+    ws.title    = 'Findings'
+    ws.sheet_view.showGridLines = False
 
-    for col, (header, width) in enumerate(zip(headers, col_widths), 1):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font      = Font(bold=True, color='FFFFFF', size=11)
-        cell.fill      = FILL_HEADER
-        cell.alignment = Alignment(horizontal='center', vertical='center')
-        ws.column_dimensions[get_column_letter(col)].width = width
-    ws.row_dimensions[1].height = 22
+    # Zeile 1: Titel-Banner
+    ws.merge_cells(f'A1:{LC}1')
+    b = ws.cell(1, 1, 'DFIR Forensic Findings — Stage 8.5 Timeline-Analyse')
+    b.font      = _font(bold=True, color='FFFFFF', size=12)
+    b.fill      = F_BANNER
+    b.alignment = _align(h='center', v='center')
+    ws.row_dimensions[1].height = 24
 
-    for row_idx, f in enumerate(findings, 2):
+    # Zeile 2: Spalten-Header
+    for col, (h, w) in enumerate(zip(HDR, WID), 1):
+        c = ws.cell(2, col, h)
+        c.font      = _font(bold=True, color='FFFFFF', size=10)
+        c.fill      = F_HEADER
+        c.alignment = _align(h='center', v='center')
+        c.border    = _BORDER
+        ws.column_dimensions[get_column_letter(col)].width = w
+    ws.row_dimensions[2].height = 20
+
+    ws.freeze_panes        = 'A3'
+    ws.auto_filter.ref     = f'A2:{LC}{len(sorted_f) + 2}'
+
+    # Datenzeilen
+    _sev_cnt = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}
+    for ri, f in enumerate(sorted_f, 3):
         ts_str = (
             f.anomaly_time.strftime('%Y-%m-%dT%H:%M:%SZ')
             if f.anomaly_time else ''
         )
-        evidence_str = ' | '.join(
+        ev_str = ' | '.join(
             f"{e.get('time','')} [{e.get('source','')}] {e.get('message','')[:80]}"
             for e in (f.evidence or [])[:3]
         )
-        values = [ts_str, f.severity, f.rule, f.file, f.description, evidence_str]
-        fill   = SEV_FILL.get(f.severity, FILL_LOW)
+        vals = [ts_str, f.severity, f.rule, f.file, f.description, ev_str]
+        sev  = f.severity
+        cnt  = _sev_cnt.get(sev, 0)
+        rbg  = ROW_BG.get(sev, [F_W, F_ALT])[cnt % 2]
+        _sev_cnt[sev] = cnt + 1
 
-        for col, val in enumerate(values, 1):
-            cell           = ws.cell(row=row_idx, column=col, value=val)
-            cell.fill      = fill
-            cell.alignment = Alignment(wrap_text=True, vertical='top')
-        ws.row_dimensions[row_idx].height = 42
+        for col, val in enumerate(vals, 1):
+            c        = ws.cell(ri, col, val)
+            c.border = _BORDER
+            if col == 2:                          # Severity-Badge
+                c.fill      = BADGE.get(sev, F_HEADER)
+                c.font      = _font(bold=True, color='FFFFFF', size=9)
+                c.alignment = _align(h='center', v='center')
+            else:
+                c.fill      = rbg
+                c.font      = _font(size=9)
+                c.alignment = _align(h='left', v='top', wrap=(col >= 5))
 
-    # Eingefrorene Kopfzeile + Auto-Filter
-    ws.freeze_panes = 'A2'
-    ws.auto_filter.ref = (
-        f'A1:{get_column_letter(len(headers))}{len(findings) + 1}'
-    )
+        ws.row_dimensions[ri].height = 28 if sev == 'CRITICAL' else 18
 
     # ── Sheet 2: Summary ─────────────────────────────────────────
     ws2 = wb.create_sheet('Summary')
-    ws2.column_dimensions['A'].width = 35
+    ws2.sheet_view.showGridLines = False
+    ws2.column_dimensions['A'].width = 38
     ws2.column_dimensions['B'].width = 12
+    ws2.column_dimensions['C'].width = 55
+    ws2.column_dimensions['D'].width = 22
 
-    title_cell = ws2.cell(1, 1, 'DFIR Forensic Findings — Zusammenfassung')
-    title_cell.font = Font(bold=True, size=14, color='1F4E79')
-    ws2.cell(2, 1, f'Generiert: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}')
+    # Banner
+    ws2.merge_cells('A1:D1')
+    b2 = ws2.cell(1, 1, 'DFIR Forensic Findings — Zusammenfassung')
+    b2.font      = _font(bold=True, color='FFFFFF', size=12)
+    b2.fill      = F_BANNER
+    b2.alignment = _align(h='center', v='center')
+    ws2.row_dimensions[1].height = 24
 
-    # Severity-Tabelle
-    ws2.cell(4, 1, 'Severity').font  = Font(bold=True, color='FFFFFF')
-    ws2.cell(4, 1).fill              = FILL_HEADER
-    ws2.cell(4, 2, 'Anzahl').font   = Font(bold=True, color='FFFFFF')
-    ws2.cell(4, 2).fill             = FILL_HEADER
+    ts_c = ws2.cell(2, 1, f'Generiert: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}')
+    ts_c.font = _font(size=9, color='5F5E5A')
 
-    sev_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
-    sev_counts = Counter(f.severity for f in findings)
-    for i, (sev, cnt) in enumerate(
-        sorted(sev_counts.items(), key=lambda x: sev_order.get(x[0], 9)), 5
-    ):
-        ws2.cell(i, 1, sev).fill  = SEV_FILL.get(sev, FILL_LOW)
-        ws2.cell(i, 2, cnt).fill  = SEV_FILL.get(sev, FILL_LOW)
+    # Severity-Tabelle (mit COUNTIF)
+    r = 4
+    for col, lbl in enumerate(['Severity', 'Anzahl'], 1):
+        c = ws2.cell(r, col, lbl)
+        c.font      = _font(bold=True, color='FFFFFF', size=10)
+        c.fill      = F_HEADER
+        c.alignment = _align(h='center', v='center')
+        c.border    = _BORDER
+    ws2.row_dimensions[r].height = 20
 
-    # Check-Typ-Tabelle
-    sep = 5 + len(sev_counts) + 1
-    ws2.cell(sep, 1, 'Check-Typ').font  = Font(bold=True, color='FFFFFF')
-    ws2.cell(sep, 1).fill               = FILL_HEADER
-    ws2.cell(sep, 2, 'Anzahl').font    = Font(bold=True, color='FFFFFF')
-    ws2.cell(sep, 2).fill              = FILL_HEADER
+    for i, sev in enumerate(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'], r + 1):
+        c1 = ws2.cell(i, 1, sev)
+        c2 = ws2.cell(i, 2, f'=COUNTIF(Findings!B:B,"{sev}")')
+        c1.fill      = BADGE.get(sev, F_HEADER)
+        c1.font      = _font(bold=True, color='FFFFFF', size=9)
+        c1.alignment = _align(h='center', v='center')
+        c2.fill      = ROW_BG.get(sev, [F_W])[0]
+        c2.font      = _font(bold=True, size=9)
+        c2.alignment = _align(h='center', v='center')
+        for c in [c1, c2]:
+            c.border = _BORDER
+        ws2.row_dimensions[i].height = 18
 
-    rule_counts = Counter(f.rule for f in findings)
-    for i, (rule, cnt) in enumerate(
-        sorted(rule_counts.items(), key=lambda x: -x[1]), sep + 1
-    ):
-        ws2.cell(i, 1, rule)
-        ws2.cell(i, 2, cnt)
+    # Check-Typ-Tabelle mit Legende (mit COUNTIF)
+    r2 = r + 7
+    for col, lbl in enumerate(['Check-Typ', 'Anzahl', 'Bedeutung', 'Bewertung'], 1):
+        c = ws2.cell(r2, col, lbl)
+        c.font      = _font(bold=True, color='FFFFFF', size=10)
+        c.fill      = F_HEADER
+        c.alignment = _align(h='center', v='center')
+        c.border    = _BORDER
+    ws2.row_dimensions[r2].height = 20
+
+    LEGEND = [
+        ('night_activity',             'Systemaktivität 00:00–05:00 Uhr',                        '⚠ Verdächtig / oft Cronjob'),
+        ('timestomping_C_gt_M',        'ctime > mtime, da ctime nicht fälschbar',                '🔴 Timestomping-Spur'),
+        ('timestomping_M_lt_B',        'mtime < birthtime, oft dpkg FP, in /home kritisch',      '🔴 Timestomping / FP möglich'),
+        ('timestamp_before_2000',      'Timestamp vor 2000 auf modernem System unrealistisch',    '⚠ Verdächtig'),
+        ('staging_area',               'Datei in /tmp /dev/shm /var/tmp — Angreifer-Ablagepfad', '🔴 Kritischer Pfad'),
+        ('activity_burst_system_path', 'Viele Systemdateien in kurzer Zeit modifiziert',          '🚨 Kritisch'),
+        ('deleted_system_file',        'Gelöschte Systemdatei — Inode noch vorhanden',            '🔴 Kritisch'),
+        ('cve_time_window',            'CVE ±30 Min neben Systemdatei-Modifikation gefunden',     '🚨 Kritisch'),
+        ('sorter_extension_mismatch',  'Dateiendung passt nicht zu Magic-Bytes — Tarnung',        '🔴 Kritisch'),
+        ('sorter_exec_in_staging',     'Executable in Staging-Bereich erkannt',                   '🚨 Kritisch'),
+    ]
+
+    for i, (check, desc, rating) in enumerate(LEGEND, r2 + 1):
+        rbg = F_W if i % 2 == 0 else F_ALT
+        for col, val in enumerate([
+            check,
+            f'=COUNTIF(Findings!C:C,"{check}")',
+            desc,
+            rating,
+        ], 1):
+            c = ws2.cell(i, col, val)
+            c.fill      = rbg
+            c.font      = _font(size=9)
+            c.border    = _BORDER
+            c.alignment = _align(h='center' if col == 2 else 'left', v='center')
+        ws2.row_dimensions[i].height = 18
 
     out = case_dir / 'forensic_findings.xlsx'
     wb.save(str(out))
