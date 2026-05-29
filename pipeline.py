@@ -202,7 +202,11 @@ def main():
         ui.show_stage13_detail(ctx)
 
         # ── Snapshot speichern (für späteren Reexport) ────────────────────────
-        save_ctx_snapshot(ctx, ctx.case_dir)
+        # try/except: Snapshot-Fehler darf Stage 14 NICHT blockieren
+        try:
+            save_ctx_snapshot(ctx, ctx.case_dir)
+        except Exception as e:
+            log.warning(f'  Snapshot konnte nicht gespeichert werden: {e} — Stage 14 läuft trotzdem')
 
         ctx = run_stage(stage14_export.run,        ctx, 'stage_14',   ui)
         ui.show_stage14_detail(ctx)
