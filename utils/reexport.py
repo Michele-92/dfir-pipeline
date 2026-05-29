@@ -27,6 +27,22 @@ log = logging.getLogger(__name__)
 _SNAPSHOT_FILE    = 'ctx_snapshot.json'
 _SNAPSHOT_VERSION = 1
 
+
+def _sanitize(obj):
+    """
+    Ersetzt ungültige Surrogate-Zeichen (\udcXX) rekursiv in allen Strings.
+    Surrogate entstehen wenn Python Dateien mit ungültigem UTF-8 liest
+    (z.B. binary Logs, beschädigte Configs).
+    json.dumps kann sie nicht serialisieren → hier bereinigen.
+    """
+    if isinstance(obj, str):
+        return obj.encode('utf-8', errors='replace').decode('utf-8')
+    if isinstance(obj, dict):
+        return {_sanitize(k): _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(i) for i in obj]
+    return obj
+
 # Dateien die Stage 14 generiert → beim Reexport-Kopieren weglassen
 _GENERATED_DOCS = {
     'report.pdf',
@@ -191,7 +207,7 @@ def save_ctx_snapshot(ctx: PipelineContext, case_dir: Path) -> None:
 
     out = case_dir / _SNAPSHOT_FILE
     out.write_text(
-        json.dumps(snapshot, indent=2, ensure_ascii=False, default=str),
+        json.dumps(_sanitize(snapshot), indent=2, ensure_ascii=False, default=str),
         encoding='utf-8',
     )
     log.info(f'  ctx_snapshot.json → {out}')
