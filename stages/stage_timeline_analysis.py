@@ -419,6 +419,8 @@ def _check_sorter_mismatches(
                 file=filename,
                 description=description,
                 anomaly_time=None,
+                expected_type=expected,
+                detected_type=detected_category,
             ))
 
         # Regel 2: Executable in Staging-Area
@@ -431,6 +433,8 @@ def _check_sorter_mismatches(
                         file=filename,
                         description=f'Executable in Staging-Bereich: {filename}',
                         anomaly_time=None,
+                        expected_type=None,
+                        detected_type='exec',
                     ))
                     break
 

@@ -314,6 +314,7 @@ def _export_forensic_findings_csv(ctx: PipelineContext, case_dir: Path) -> None:
         writer = csv.writer(f)
         writer.writerow([
             'Timestamp_UTC', 'Severity', 'Check_Type',
+            'Erwarteter_Typ', 'Erkannter_Typ',
             'Datei', 'Befund', 'Kontext_Stage6',
         ])
         for finding in findings:
@@ -329,6 +330,8 @@ def _export_forensic_findings_csv(ctx: PipelineContext, case_dir: Path) -> None:
                 ts_str,
                 finding.severity,
                 finding.rule,
+                getattr(finding, 'expected_type', '') or '',
+                getattr(finding, 'detected_type', '') or '',
                 finding.file,
                 finding.description,
                 evidence_str,
@@ -393,8 +396,8 @@ def _export_forensic_findings_excel(ctx: PipelineContext, case_dir: Path) -> Non
     ))
 
     wb  = Workbook()
-    HDR = ['Timestamp_UTC', 'Severity', 'Check_Type', 'Datei', 'Befund', 'Kontext_Stage6']
-    WID = [22, 12, 28, 40, 55, 60]
+    HDR = ['Timestamp_UTC', 'Severity', 'Check_Type', 'Erwarteter_Typ', 'Erkannter_Typ', 'Datei', 'Befund', 'Kontext_Stage6']
+    WID = [22, 12, 28, 16, 16, 40, 55, 60]
     NC  = len(HDR)
     LC  = get_column_letter(NC)
 
@@ -435,7 +438,12 @@ def _export_forensic_findings_excel(ctx: PipelineContext, case_dir: Path) -> Non
             f"{e.get('time','')} [{e.get('source','')}] {e.get('message','')[:80]}"
             for e in (f.evidence or [])[:3]
         )
-        vals = [ts_str, f.severity, f.rule, f.file, f.description, ev_str]
+        vals = [
+            ts_str, f.severity, f.rule,
+            getattr(f, 'expected_type', '') or '',
+            getattr(f, 'detected_type', '') or '',
+            f.file, f.description, ev_str,
+        ]
         sev  = f.severity
         cnt  = _sev_cnt.get(sev, 0)
         rbg  = ROW_BG.get(sev, [F_W, F_ALT])[cnt % 2]
