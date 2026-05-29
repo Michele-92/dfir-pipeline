@@ -11,6 +11,12 @@ from pathlib import Path
 from models.pipeline_context import PipelineContext
 from utils.logger import get_logger
 from utils.rich_ui import PipelineUI
+from utils.reexport import (
+    save_ctx_snapshot,
+    list_available_runs,
+    create_reexport_dir,
+    reconstruct_ctx,
+)
 
 from stages import (
     stage01_detection,
@@ -85,7 +91,8 @@ def main():
         description='DFIR Analyse-Pipeline v3.0',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument('image',           help='Pfad zum Disk-Image (.E01, .dd, .vmdk, .raw)')
+    parser.add_argument('image', nargs='?', default=None,
+                        help='Pfad zum Disk-Image (.E01, .dd, .vmdk, .raw) — weglassen für Reexport-Modus')
     parser.add_argument('--ram',           help='Pfad zum RAM-Dump (.raw, .dmp, .mem)')
     parser.add_argument('--logs',          help='Pfad zum Log-Ordner')
     parser.add_argument('--output_dir',    default='./output', help='Ausgabe-Verzeichnis')
@@ -106,6 +113,15 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    output_dir = Path(args.output_dir)
+
+    # ── Startmodus bestimmen ──────────────────────────────────────────────────
+    # Kein Image angegeben → Reexport-Modus prüfen
+    if args.image is None:
+        exit_code = _run_reexport_menu(output_dir)
+        return exit_code
+
+    # Image angegeben → normaler Durchlauf
     image_path = Path(args.image)
     if not image_path.exists():
         print(f'[Fehler] Image nicht gefunden: {image_path}')
@@ -115,7 +131,7 @@ def main():
         disk_image_path = image_path,
         ram_dump_path   = Path(args.ram)  if args.ram  else None,
         logs_dir_path   = Path(args.logs) if args.logs else None,
-        output_dir      = Path(args.output_dir),
+        output_dir      = output_dir,
         workers         = args.workers,
         skip_bulk_extractor = args.no_bulk_extractor,
         skip_mactime        = args.no_mactime,
@@ -178,6 +194,9 @@ def main():
         ctx = run_stage(stage13_quality.run,       ctx, 'stage_13',   ui)
         ui.show_stage13_detail(ctx)
 
+        # ── Snapshot speichern (für späteren Reexport) ────────────────────────
+        save_ctx_snapshot(ctx, ctx.case_dir)
+
         ctx = run_stage(stage14_export.run,        ctx, 'stage_14',   ui)
         ui.show_stage14_detail(ctx)
 
@@ -186,6 +205,90 @@ def main():
 
     # ── Abschluss-Zusammenfassung ─────────────────────────────────────────────
     ui.show_summary(ctx)
+
+    return 0 if not ctx.stage_errors else 1
+
+
+# ── REEXPORT-MENÜ ─────────────────────────────────────────────────────────────
+
+def _run_reexport_menu(output_dir: Path) -> int:
+    """
+    Interaktives Menü wenn pipeline.py ohne Image gestartet wird.
+    Zeigt verfügbare Testläufe → User wählt einen → Stage 14 läuft neu.
+    """
+    print()
+    print('╔══════════════════════════════════════════════════════════╗')
+    print('║        DFIR Pipeline — Kein Image angegeben              ║')
+    print('╠══════════════════════════════════════════════════════════╣')
+    print('║  [1]  Neuer Testlauf   (Image-Pfad angeben)              ║')
+    print('║  [2]  Dokumente neu erstellen aus bestehendem Testlauf   ║')
+    print('╚══════════════════════════════════════════════════════════╝')
+    print()
+
+    while True:
+        choice = input('  Auswahl [1/2]: ').strip()
+        if choice in ('1', '2'):
+            break
+        print('  Bitte 1 oder 2 eingeben.')
+
+    if choice == '1':
+        print()
+        print('  Starte Pipeline neu mit:  python pipeline.py <image>')
+        return 0
+
+    # ── Reexport gewählt ─────────────────────────────────────────────────────
+    runs = list_available_runs(output_dir)
+
+    if not runs:
+        print()
+        print('  ⚠  Du hast noch keinen Testlauf gestartet.')
+        print('     Starte zuerst einen vollständigen Durchlauf:')
+        print('     python pipeline.py <image>')
+        print()
+        return 1
+
+    print()
+    print('  Verfügbare Testläufe:')
+    print()
+    print(f'  {"Nr":>3}  {"Name":<45}  {"Erstellt":<19}  {"OS":<22}  {"Findings":>8}  {"IOCs":>6}')
+    print('  ' + '─' * 110)
+    for i, run in enumerate(runs, 1):
+        print(f'  {i:>3}  {run["name"]:<45}  {run["created"]:<19}  '
+              f'{run["os"][:22]:<22}  {run["findings"]:>8}  {run["iocs"]:>6}')
+    print()
+
+    while True:
+        sel = input(f'  Testlauf auswählen [1–{len(runs)}]: ').strip()
+        if sel.isdigit() and 1 <= int(sel) <= len(runs):
+            selected = runs[int(sel) - 1]
+            break
+        print(f'  Bitte eine Zahl zwischen 1 und {len(runs)} eingeben.')
+
+    print()
+    print(f'  Gewählt: {selected["name"]}')
+    print(f'  Erstelle neuen Ordner und generiere Dokumente neu ...')
+    print()
+
+    # Neuen Ordner erstellen (ohne Stage-14-Dokumente)
+    new_case_dir = create_reexport_dir(selected['dir'], output_dir)
+
+    # ctx aus Snapshot laden
+    snapshot_path = selected['dir'] / 'ctx_snapshot.json'
+    ctx           = reconstruct_ctx(snapshot_path, new_case_dir)
+
+    # Stage 14 ausführen
+    ui = PipelineUI(image_name=selected['name'])
+    ui.start()
+    try:
+        ctx = run_stage(stage14_export.run, ctx, 'stage_14', ui)
+        ui.show_stage14_detail(ctx)
+    finally:
+        ui.stop()
+
+    print()
+    print(f'  ✅  Dokumente erstellt in:')
+    print(f'      {new_case_dir}')
+    print()
 
     return 0 if not ctx.stage_errors else 1
 

@@ -543,6 +543,181 @@ def _export_forensic_findings_excel(ctx: PipelineContext, case_dir: Path) -> Non
             c.alignment = _align(h='center' if col == 2 else 'left', v='center')
         ws2.row_dimensions[i].height = 18
 
+    # ── Sheet 3: Regelwerk ───────────────────────────────────────
+    ws3 = wb.create_sheet('Regelwerk')
+    ws3.sheet_view.showGridLines = False
+    ws3.column_dimensions['A'].width = 46   # Check
+    ws3.column_dimensions['B'].width = 42   # Regel
+    ws3.column_dimensions['C'].width = 14   # Severity
+    ws3.column_dimensions['D'].width = 70   # Erklärung
+
+    # Banner
+    ws3.merge_cells('A1:D1')
+    b3 = ws3.cell(1, 1, 'DFIR Regelwerk — Stage 8.5 Check-Erläuterungen')
+    b3.font      = _font(bold=True, color='FFFFFF', size=12)
+    b3.fill      = F_BANNER
+    b3.alignment = _align(h='center', v='center')
+    ws3.row_dimensions[1].height = 24
+
+    # Spalten-Header
+    for col, lbl in enumerate(['Check', 'Regel', 'Severity', 'Erklärung'], 1):
+        c = ws3.cell(2, col, lbl)
+        c.font      = _font(bold=True, color='FFFFFF', size=10)
+        c.fill      = F_HEADER
+        c.alignment = _align(h='center', v='center')
+        c.border    = _BORDER
+    ws3.row_dimensions[2].height = 20
+    ws3.freeze_panes = 'A3'
+
+    REGELWERK = [
+        (
+            'M < B in /tmp/, /home/, /root/, /dev/shm/, /run/user/',
+            'Timestamp-Manipulation in Verdachtspfad',
+            'CRITICAL',
+            'Die Änderungszeit (mtime) liegt vor dem Erstellzeitpunkt (birthtime) in einem '
+            'typischen Angreifer-Pfad. Dies deutet auf gezieltes Timestomping hin — ein '
+            'nachträgliches Zurücksetzen des Timestamps zur Verschleierung des Zugriffszeitpunkts.',
+        ),
+        (
+            'M < B in /opt/, /srv/, /var/',
+            'Möglicherweise rsync/tar oder Manipulation',
+            'HIGH',
+            'mtime liegt vor birthtime in einem neutralen Pfad, der weder rein dpkg-verwaltet '
+            'noch klassischer Angreifer-Pfad ist. Kann durch Backup-Tools (rsync, tar --preserve) '
+            'entstehen, erfordert aber Einzelfallprüfung.',
+        ),
+        (
+            'C > M + 1h',
+            'ctime viel neuer als mtime — touch -t Verdacht',
+            'HIGH',
+            'Die Change-Time (ctime) ist über eine Stunde neuer als die Modify-Time (mtime). '
+            'Da ctime vom Kernel intern gesetzt und nicht direkt manipulierbar ist, '
+            'weist eine solche Diskrepanz auf den Einsatz von touch -t zur mtime-Fälschung hin.',
+        ),
+        (
+            'Timestamp vor Jahr 2000',
+            'Unrealistisch auf modernem System',
+            'HIGH',
+            'Timestamps vor dem Jahr 2000 sind auf modernen Linux-Systemen strukturell '
+            'ausgeschlossen. Solche Werte entstehen typischerweise durch manuelle Manipulation '
+            '(touch -t 19990101) oder fehlerhafte Exploit-Tools.',
+        ),
+        (
+            'Activity Burst (>10 Systemdateien in 5 Min)',
+            'Rootkit-typisch',
+            'HIGH',
+            'Mehr als 10 Systemdateien wurden innerhalb von 5 Minuten modifiziert. Dieses '
+            'Muster ist charakteristisch für Rootkit-Installationen, die viele Systembinaries '
+            'gleichzeitig ersetzen oder patchen.',
+        ),
+        (
+            'Staging Area (Datei in /tmp/, /dev/shm/ etc.)',
+            'Angreifer-Ablagepfad',
+            'MEDIUM',
+            'Eine Datei befindet sich in einem temporären Verzeichnis, das häufig als '
+            'Zwischenspeicher für Angreifer-Tools genutzt wird. Allein kein Beweis, '
+            'aber im Kontext weiterer Findings ein starker Verdachtsindikator.',
+        ),
+        (
+            'Deleted System File',
+            'Gelöschter Inode in Systempfad',
+            'HIGH',
+            'Ein Inode in einem Systempfad ist noch vorhanden, aber nicht mehr im Verzeichnisbaum '
+            'verlinkt (gelöschte Datei). Angreifer löschen Tools nach Ausführung — der Inode '
+            'kann jedoch noch forensisch rekonstruiert werden.',
+        ),
+        (
+            'Night Activity (00:00–05:00 Uhr)',
+            'Systemaktivität zur Nachtzeit',
+            'MEDIUM',
+            'Dateisystemaktivität zwischen Mitternacht und 5 Uhr morgens. Kann legitime '
+            'Cronjobs (Backup, Update) sein, ist in Kombination mit anderen Findings aber '
+            'ein Hinweis auf automatisierten Angriff oder persistente Backdoor-Kommunikation.',
+        ),
+        (
+            'Sorter Mismatch + detected = exec',
+            'Dateitarnung als Executable',
+            'CRITICAL',
+            'Die Dateiendung suggeriert ein harmloses Format (z.B. .pdf, .jpg), Magic-Bytes '
+            'belegen jedoch ein ELF-Binary oder Shell-Script. Klassische Tarnungstechnik, '
+            'um Endpoint-Filter zu umgehen und ausführbaren Code zu verbergen.',
+        ),
+        (
+            'Sorter Mismatch + detected ≠ exec',
+            'Dateitarnung (andere Kategorie)',
+            'HIGH',
+            'Dateiendung und tatsächlicher Dateityp (laut Magic-Bytes) stimmen nicht überein, '
+            'das Ergebnis ist aber kein ausführbares Binary. Kann Obfuskierung von Archiven, '
+            'verschlüsselten Containern oder Dokumenten anzeigen.',
+        ),
+        (
+            'Sorter Mismatch + MACtime-Anomalie auf gleicher Datei',
+            'Doppelte Verschleierung',
+            'CRITICAL',
+            'Eine Datei zeigt gleichzeitig Typ-Fälschung (Sorter-Mismatch) und Timestamp-'
+            'Manipulation (MACtime-Anomalie). Das gleichzeitige Auftreten beider Techniken '
+            'auf derselben Datei ist ein starker Indikator für gezieltes Anti-Forensics.',
+        ),
+        (
+            'Exec in Staging (laut Sorter)',
+            'Executable in /tmp/ etc.',
+            'CRITICAL',
+            'Sorter hat eine ausführbare Datei (ELF-Binary, Shell-Script) in einem Staging-'
+            'Verzeichnis identifiziert. Dies ist ein klassischer Dropper-Indikator: Angreifer '
+            'laden Payloads in temporäre Verzeichnisse und starten sie von dort.',
+        ),
+        (
+            'CVE-2021-4034 / CVE-2022-0847 + Systemdatei ±30 Min',
+            'Bekannte kritische CVEs (PwnKit, Dirty Pipe)',
+            'CRITICAL',
+            'Systemdatei-Aktivität innerhalb von 30 Minuten um einen bekannten kritischen '
+            'CVE-Exploit-Zeitpunkt. Die zeitliche Korrelation dieser Privilege-Escalation-CVEs '
+            'mit Systemdatei-Modifikationen ist ein starker Kompromittierungshinweis.',
+        ),
+        (
+            'Andere CVEs + Systemdatei ±30 Min',
+            'CVE-Zeitfenster',
+            'HIGH',
+            'Systemdatei-Aktivität im ±30-Minuten-Fenster um einen anderen bekannten CVE-Exploit-'
+            'Zeitpunkt. Der Verdachtsgrad ist geringer als bei kritischen CVEs, erfordert aber '
+            'manuelle Untersuchung ob ein zeitlicher Zusammenhang besteht.',
+        ),
+        (
+            'Stage-9-Upgrade (Timestomping bestätigt)',
+            'Cross-Referenz Stage 9',
+            '→ CRITICAL',
+            'Stage 9 (Hayabusa/Sigma) hat unabhängig Timestomping-Aktivität auf derselben '
+            'Datei detektiert. Die Bestätigung durch zwei unabhängige Analyse-Methoden '
+            'erhöht die Konfidenz deutlich — das Finding wird automatisch auf CRITICAL hochgestuft.',
+        ),
+        (
+            'Stage-9-Upgrade (Rootkit-Indikator bestätigt)',
+            'Cross-Referenz Stage 9',
+            '→ CRITICAL',
+            'Stage 9 hat unabhängig einen Rootkit-Indikator auf derselben Datei identifiziert. '
+            'Die Kombination aus Timeline-Anomalie (Stage 8.5) und Sigma-Regelübereinstimmung '
+            '(Stage 9) ist ein starker Kompromittierungsnachweis.',
+        ),
+    ]
+
+    for i, (check, regel, severity, erklaerung) in enumerate(REGELWERK, 3):
+        rbg        = F_W if i % 2 == 1 else F_ALT
+        sev_key    = severity.lstrip('→ ').strip()
+        badge_fill = BADGE.get(sev_key, _fill('5F5E5A'))
+
+        for col, val in enumerate([check, regel, severity, erklaerung], 1):
+            c        = ws3.cell(i, col, val)
+            c.border = _BORDER
+            if col == 3:   # Severity-Badge
+                c.fill      = badge_fill
+                c.font      = _font(bold=True, color='FFFFFF', size=9)
+                c.alignment = _align(h='center', v='center')
+            else:
+                c.fill      = rbg
+                c.font      = _font(size=9)
+                c.alignment = _align(h='left', v='top', wrap=True)
+        ws3.row_dimensions[i].height = 38
+
     out = case_dir / 'forensic_findings.xlsx'
     wb.save(str(out))
     log.info(f'  forensic_findings.xlsx → {out}  ({len(findings)} Befunde)')
