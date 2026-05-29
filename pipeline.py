@@ -115,13 +115,20 @@ def main():
 
     output_dir = Path(args.output_dir)
 
-    # ── Startmodus bestimmen ──────────────────────────────────────────────────
-    # Kein Image angegeben → Reexport-Modus prüfen
-    if args.image is None:
-        exit_code = _run_reexport_menu(output_dir)
-        return exit_code
+    # ── Startmodus — immer fragen ─────────────────────────────────────────────
+    choice = _show_startup_menu(output_dir, args.image)
 
-    # Image angegeben → normaler Durchlauf
+    if choice == 'reexport':
+        return _run_reexport_flow(output_dir)
+
+    # Neuer Testlauf gewählt
+    if args.image is None:
+        print()
+        print('  [Fehler] Kein Image angegeben.')
+        print('  Starte mit:  python pipeline.py <image.E01>')
+        print()
+        sys.exit(1)
+
     image_path = Path(args.image)
     if not image_path.exists():
         print(f'[Fehler] Image nicht gefunden: {image_path}')
@@ -209,34 +216,34 @@ def main():
     return 0 if not ctx.stage_errors else 1
 
 
-# ── REEXPORT-MENÜ ─────────────────────────────────────────────────────────────
+# ── STARTUP-MENÜ (immer angezeigt) ───────────────────────────────────────────
 
-def _run_reexport_menu(output_dir: Path) -> int:
+def _show_startup_menu(output_dir: Path, image: str) -> str:
     """
-    Interaktives Menü wenn pipeline.py ohne Image gestartet wird.
-    Zeigt verfügbare Testläufe → User wählt einen → Stage 14 läuft neu.
+    Wird immer beim Start angezeigt — egal ob Image angegeben oder nicht.
+    Gibt 'new' oder 'reexport' zurück.
     """
+    image_label = image if image else '(kein Image angegeben)'
     print()
     print('╔══════════════════════════════════════════════════════════╗')
-    print('║        DFIR Pipeline — Kein Image angegeben              ║')
+    print('║               DFIR Pipeline v3.0                        ║')
     print('╠══════════════════════════════════════════════════════════╣')
-    print('║  [1]  Neuer Testlauf   (Image-Pfad angeben)              ║')
+    print(f'║  [1]  Neuer Testlauf   {image_label[:34]:<34}║')
     print('║  [2]  Dokumente neu erstellen aus bestehendem Testlauf   ║')
     print('╚══════════════════════════════════════════════════════════╝')
     print()
 
     while True:
         choice = input('  Auswahl [1/2]: ').strip()
-        if choice in ('1', '2'):
-            break
+        if choice == '1':
+            return 'new'
+        if choice == '2':
+            return 'reexport'
         print('  Bitte 1 oder 2 eingeben.')
 
-    if choice == '1':
-        print()
-        print('  Starte Pipeline neu mit:  python pipeline.py <image>')
-        return 0
 
-    # ── Reexport gewählt ─────────────────────────────────────────────────────
+def _run_reexport_flow(output_dir: Path) -> int:
+    """Reexport-Logik: Testlauf auswählen → Stage 14 neu ausführen."""
     runs = list_available_runs(output_dir)
 
     if not runs:
