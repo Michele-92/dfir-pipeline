@@ -30,10 +30,10 @@ _SNAPSHOT_VERSION = 1
 
 def _sanitize(obj):
     """
-    Ersetzt ungültige Surrogate-Zeichen (\udcXX) rekursiv in allen Strings.
-    Surrogate entstehen wenn Python Dateien mit ungültigem UTF-8 liest
-    (z.B. binary Logs, beschädigte Configs).
-    json.dumps kann sie nicht serialisieren → hier bereinigen.
+    Ersetzt ungueltige Surrogate-Zeichen rekursiv in allen Strings.
+    Surrogate entstehen wenn Python Dateien mit ungueltigem UTF-8 liest
+    (z.B. binary Logs, beschaedigte Configs).
+    json.dumps kann sie nicht serialisieren - hier bereinigen.
     """
     if isinstance(obj, str):
         return obj.encode('utf-8', errors='replace').decode('utf-8')
