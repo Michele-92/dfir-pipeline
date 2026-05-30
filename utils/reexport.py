@@ -216,18 +216,28 @@ def save_ctx_snapshot(ctx: PipelineContext, case_dir: Path) -> None:
 # ── 2. VORHANDENE TESTLÄUFE AUFLISTEN ────────────────────────────────────────
 
 def list_available_runs(output_dir: Path) -> List[Dict]:
-    """Gibt alle Case-Verzeichnisse zurück die einen Snapshot haben (neueste zuerst)."""
+    """
+    Gibt alle Case-Verzeichnisse zurueck die einen Snapshot haben (neueste zuerst).
+    Sucht rekursiv — case_dir liegt 3 Ebenen tief:
+      output_dir / YYYY / MM_Monat / DD_Tag / case_YYYYMMDD_HHMMSS / ctx_snapshot.json
+    """
     runs = []
     if not output_dir.exists():
         return runs
-    for d in sorted(output_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-        if not d.is_dir():
-            continue
-        snap_path = d / _SNAPSHOT_FILE
-        if not snap_path.exists():
-            continue
+
+    # rglob findet ctx_snapshot.json auf beliebiger Tiefe
+    snap_paths = sorted(
+        output_dir.rglob(_SNAPSHOT_FILE),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    for snap_path in snap_paths:
+        d = snap_path.parent   # das eigentliche case_dir
         try:
             snap = json.loads(snap_path.read_text(encoding='utf-8'))
+            if not snap:          # leere Datei vom alten Crash
+                continue
             runs.append({
                 'dir':      d,
                 'name':     d.name,
