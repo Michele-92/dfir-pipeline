@@ -89,8 +89,28 @@ def _generate_critical_report(ctx: PipelineContext, case_dir: Path) -> None:
 
 # ── pipeline_report.json ─────────────────────────────────────────────────────
 
+def _safe_duration(start_time) -> int:
+    """Minuten seit start_time — robust gegen naive/aware-Mischung."""
+    if start_time is None:
+        return 0
+    try:
+        now = datetime.now(timezone.utc) if start_time.tzinfo else datetime.now()
+        return (now - start_time).seconds // 60
+    except Exception:
+        return 0
+
+
+def _to_utc(dt) -> datetime:
+    """Normalisiert datetime fuer Sortierschluessel — immer timezone-aware UTC."""
+    if dt is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _write_pipeline_report(ctx: PipelineContext, case_dir: Path) -> None:
-    duration = (datetime.now() - ctx.start_time).seconds // 60
+    duration = _safe_duration(ctx.start_time)
     report   = {
         'meta': {
             'case_id':          case_dir.name,
@@ -389,10 +409,11 @@ def _export_forensic_findings_excel(ctx: PipelineContext, case_dir: Path) -> Non
     }
 
     # Sortierung: CRITICAL → HIGH → MEDIUM → LOW, dann Timestamp aufsteigend
+    # _to_utc() normalisiert naive/aware-Mischung → kein TypeError beim Vergleich
     _sev_ord = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
     sorted_f = sorted(findings, key=lambda f: (
         _sev_ord.get(f.severity, 4),
-        f.anomaly_time or datetime.min.replace(tzinfo=timezone.utc),
+        _to_utc(f.anomaly_time),
     ))
 
     wb  = Workbook()
@@ -861,7 +882,7 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     case_id   = case_dir.name
     created   = datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
     quality   = evaluate_quality(ctx)
-    duration  = (datetime.now() - ctx.start_time).seconds // 60
+    duration  = _safe_duration(ctx.start_time)
 
     def _rl_color(t):
         from reportlab.lib.colors import Color
