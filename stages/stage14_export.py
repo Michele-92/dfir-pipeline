@@ -718,6 +718,118 @@ def _export_forensic_findings_excel(ctx: PipelineContext, case_dir: Path) -> Non
                 c.alignment = _align(h='left', v='top', wrap=True)
         ws3.row_dimensions[i].height = 38
 
+    # ── Sheet 4: Sorter-Übersicht ────────────────────────────────
+    sorter_files = getattr(ctx, 'tsk_sorter_files', {}) or {}
+
+    # Dateiendung → erwartete Kategorie (identisch mit stage_timeline_analysis.py)
+    _EXT_EXPECTED = {
+        '.jpg': 'images',  '.jpeg': 'images', '.png': 'images',
+        '.gif': 'images',  '.bmp': 'images',
+        '.pdf': 'documents',
+        '.txt': 'text',    '.log':  'text',   '.conf': 'text',  '.csv': 'text',
+        '.zip': 'archive', '.tar':  'archive', '.gz': 'archive', '.bz2': 'archive',
+        '.mp3': 'audio',   '.wav':  'audio',
+        '.mp4': 'video',   '.avi':  'video',
+        '.sh':  'exec',    '.py':   'exec',
+    }
+
+    ws4 = wb.create_sheet('Sorter-Übersicht')
+    ws4.sheet_view.showGridLines = False
+    ws4.column_dimensions['A'].width = 50   # Datei
+    ws4.column_dimensions['B'].width = 20   # Erkannter_Typ
+    ws4.column_dimensions['C'].width = 20   # Erwarteter_Typ
+    ws4.column_dimensions['D'].width = 24   # Status
+
+    # Banner
+    ws4.merge_cells('A1:D1')
+    b4 = ws4.cell(1, 1, f'DFIR Sorter-Übersicht — {len(sorter_files)} klassifizierte Dateien')
+    b4.font      = _font(bold=True, color='FFFFFF', size=12)
+    b4.fill      = F_BANNER
+    b4.alignment = _align(h='center', v='center')
+    ws4.row_dimensions[1].height = 24
+
+    # Header
+    for col, lbl in enumerate(['Datei', 'Erkannter_Typ', 'Erwarteter_Typ', 'Status'], 1):
+        c = ws4.cell(2, col, lbl)
+        c.font      = _font(bold=True, color='FFFFFF', size=10)
+        c.fill      = F_HEADER
+        c.alignment = _align(h='center', v='center')
+        c.border    = _BORDER
+    ws4.row_dimensions[2].height = 20
+    ws4.freeze_panes = 'A3'
+
+    if not sorter_files:
+        ws4.merge_cells('A3:D3')
+        msg = ws4.cell(3, 1, 'Kein Sorter-Output vorhanden — MACtime/Sorter möglicherweise deaktiviert.')
+        msg.font      = _font(size=9, color='5F5E5A')
+        msg.alignment = _align(h='center', v='center')
+        msg.fill      = F_ALT
+    else:
+        # Sortierung: Mismatches zuerst, dann alphabetisch nach Dateiname
+        def _sort_key(item):
+            fname, detected = item
+            ext      = Path(fname).suffix.lower()
+            expected = _EXT_EXPECTED.get(ext)
+            is_match = (expected is None) or (expected == detected)
+            return (0 if not is_match else 1, fname.lower())
+
+        sorted_sorter = sorted(sorter_files.items(), key=_sort_key)
+
+        # Farben: Übereinstimmung → grün, Mismatch → rot, unbekannte Endung → neutral
+        F_MATCH_A  = _fill('E8F5E9')   # hellgrün
+        F_MATCH_B  = _fill('D4EDDA')   # hellgrün alternierend
+        F_MISS_A   = _fill('FFF5F5')   # hellrot
+        F_MISS_B   = _fill('FFEDED')   # hellrot alternierend
+        F_NONE_A   = F_W               # weiß (unbekannte Endung)
+        F_NONE_B   = F_ALT             # leicht grau
+
+        match_cnt  = 0
+        miss_cnt   = 0
+        none_cnt   = 0
+
+        for i, (fname, detected) in enumerate(sorted_sorter, 3):
+            ext      = Path(fname).suffix.lower()
+            expected = _EXT_EXPECTED.get(ext)
+
+            if expected is None:
+                status   = '—  Keine Referenz'
+                rbg      = F_NONE_A if none_cnt % 2 == 0 else F_NONE_B
+                none_cnt += 1
+                exp_disp = '—'
+            elif expected == detected:
+                status    = '✅  Übereinstimmung'
+                rbg       = F_MATCH_A if match_cnt % 2 == 0 else F_MATCH_B
+                match_cnt += 1
+                exp_disp  = expected
+            else:
+                status   = '⚠  Mismatch'
+                rbg      = F_MISS_A if miss_cnt % 2 == 0 else F_MISS_B
+                miss_cnt += 1
+                exp_disp = expected
+
+            for col, val in enumerate([fname, detected, exp_disp, status], 1):
+                c        = ws4.cell(i, col, val)
+                c.fill   = rbg
+                c.font   = _font(size=9)
+                c.border = _BORDER
+                c.alignment = _align(h='left', v='center')
+            ws4.row_dimensions[i].height = 18
+
+        # Zusammenfassung unten
+        summary_row = len(sorted_sorter) + 4
+        ws4.merge_cells(f'A{summary_row}:D{summary_row}')
+        summary_txt = (
+            f'Gesamt: {len(sorter_files)}  |  '
+            f'✅ Übereinstimmung: {match_cnt}  |  '
+            f'⚠ Mismatch: {miss_cnt}  |  '
+            f'— Keine Referenz: {none_cnt}'
+        )
+        sc = ws4.cell(summary_row, 1, summary_txt)
+        sc.font      = _font(bold=True, size=9, color='1B3A5C')
+        sc.fill      = F_ALT
+        sc.alignment = _align(h='center', v='center')
+        sc.border    = _BORDER
+
     out = case_dir / 'forensic_findings.xlsx'
     wb.save(str(out))
     log.info(f'  forensic_findings.xlsx → {out}  ({len(findings)} Befunde)')
