@@ -127,6 +127,11 @@ def save_ctx_snapshot(ctx: PipelineContext, case_dir: Path) -> None:
         'analysis_partitions': ctx.analysis_partitions,
         'partition_layout':    ctx.partition_layout,
 
+        # ── Sorter ────────────────────────────────────────────
+        'tsk_sorter_files':      getattr(ctx, 'tsk_sorter_files',      {}),
+        'tsk_sorter_categories': getattr(ctx, 'tsk_sorter_categories', {}),
+        'tsk_sorter_ran':        getattr(ctx, 'tsk_sorter_ran',        False),
+
         # ── Nutzer ───────────────────────────────────────────
         'users': ctx.users,
 
@@ -404,5 +409,10 @@ def reconstruct_ctx(snapshot_path: Path, new_case_dir: Path) -> PipelineContext:
         ctx.e01_hash = data['e01_hash']
     if data.get('e01_md5'):
         ctx.e01_md5 = data['e01_md5']
+
+    # Sorter-Daten (dynamische Attribute — nicht im Dataclass-Schema)
+    ctx.tsk_sorter_files      = data.get('tsk_sorter_files', {})
+    ctx.tsk_sorter_categories = data.get('tsk_sorter_categories', {})
+    ctx.tsk_sorter_ran        = data.get('tsk_sorter_ran', False)
 
     return ctx
