@@ -451,17 +451,40 @@ def _run_sorter(image_path: Path, offset: int,
         ctx.tsk_sorter_ran        = True
         ctx.tsk_sorter_categories = categories
 
-        # Sorter-Output-Verzeichnis scannen → Datei-zu-Kategorie Mapping aufbauen
-        # Der Sorter erstellt Unterordner pro Kategorie (exec/, images/, archive/...)
-        # und legt die erkannten Dateien dort ab.
+        # Sorter-Output: TSK sorter schreibt Textdateien pro Kategorie
+        # (exec.txt, documents.txt, images.txt, ...) — KEINE Unterordner
+        # Jede Datei enthält einen Dateipfad pro Zeile (ggf. tab-getrennt).
+        _CAT_FILES = {
+            'exec.txt':      'exec',
+            'documents.txt': 'documents',
+            'images.txt':    'images',
+            'text.txt':      'text',
+            'archive.txt':   'archive',
+            'compress.txt':  'archive',
+            'audio.txt':     'audio',
+            'video.txt':     'video',
+            'crypto.txt':    'crypto',
+            'data.txt':      'data',
+            'disk.txt':      'disk',
+            'system.txt':    'system',
+            'unknown.txt':   'unknown',
+        }
         sorter_files: Dict[str, str] = {}
-        for category_dir in out_dir.iterdir():
-            if not category_dir.is_dir():
+        for cat_filename, category in _CAT_FILES.items():
+            cat_path = out_dir / cat_filename
+            if not cat_path.exists() or cat_path.stat().st_size == 0:
                 continue
-            category = category_dir.name  # z.B. "exec", "images", "archive"
-            for f in category_dir.rglob('*'):
-                if f.is_file():
-                    sorter_files[f.name] = category
+            for line in cat_path.read_text(errors='replace').splitlines():
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                # Zeilen können sein: "/pfad/datei" oder "inode\t/pfad/datei"
+                parts = line.split('\t')
+                fpath = parts[-1].strip()
+                fname = Path(fpath).name
+                if fname:
+                    sorter_files[fname] = category
+
         ctx.tsk_sorter_files = sorter_files
         log.info(f'  Sorter: {len(categories)} Kategorien, {len(sorter_files)} Dateien klassifiziert')
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
