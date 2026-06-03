@@ -50,6 +50,9 @@ def run(ctx: PipelineContext) -> PipelineContext:
     _export_mactime_package(ctx, case_dir)
     _export_forensic_findings_csv(ctx, case_dir)
     _export_forensic_findings_excel(ctx, case_dir)
+    _write_ip_sessions_excel(ctx, case_dir)
+    _write_reboot_sessions_excel(ctx, case_dir)
+    _write_filtered_filesystem_timeline_excel(ctx, case_dir)
     _generate_report_pdf(ctx, case_dir)
     _generate_coc_pdf(ctx, case_dir)
     _generate_critical_report(ctx, case_dir)
@@ -210,6 +213,45 @@ _LOGIN_KEYWORDS  = ['session opened', 'accepted password', 'accepted publickey',
 _CRASH_KEYWORDS  = ['kernel panic', 'oom killer', 'segfault', 'out of memory',
                     'killed process', 'call trace']
 
+# ── Reboot-Session-Konstanten ─────────────────────────────────────────────────
+_SHUTDOWN_EVENT_TYPES = {'shutdown', 'system_shutdown'}
+_BOOT_EVENT_TYPES     = {'boot', 'system_boot', 'kernel_start'}
+_SHUTDOWN_KEYWORDS    = ['shutting down', 'halt', 'poweroff', 'initiating shutdown',
+                         'reached target shutdown']
+_BOOT_KEYWORDS_REBOOT = ['system boot', 'kernel command line', 'linux version',
+                         'reached target basic system']
+
+# ── IP-Session-Konstanten ─────────────────────────────────────────────────────
+_SUCCESS_LOGIN_TYPES = {
+    'ssh_login_success', 'auth_success', 'pam_session',
+    'user_login', 'console_login', 'su_session',
+}
+
+# ── Filesystem-Timeline-Konstanten ────────────────────────────────────────────
+_INTERESTING_PREFIXES = (
+    '/home/', '/root/', '/tmp/', '/var/tmp/', '/dev/shm/',
+    '/etc/', '/usr/local/', '/opt/', '/srv/', '/var/www/',
+    '/run/', '/var/spool/',
+)
+_NOISE_PREFIXES = (
+    '/usr/lib/', '/usr/share/', '/lib/', '/lib64/',
+    '/proc/', '/sys/', '/dev/', '/run/lock/', '/snap/',
+)
+_PATH_CATEGORY_MAP = [
+    ('/tmp/',       'Staging',   'FFF5F5', 'FFEDED'),
+    ('/dev/shm/',   'Staging',   'FFF5F5', 'FFEDED'),
+    ('/var/tmp/',   'Staging',   'FFF5F5', 'FFEDED'),
+    ('/home/',      'User-Dir',  'FFF4DC', 'FFEAC8'),
+    ('/root/',      'User-Dir',  'FFF4DC', 'FFEAC8'),
+    ('/run/',       'Runtime',   'FFF4DC', 'FFEAC8'),
+    ('/etc/',       'Config',    'FFFDE7', 'FFF9C4'),
+    ('/usr/local/', 'Custom',    'F0F7FF', 'E3F0FF'),
+    ('/opt/',       'Custom',    'F0F7FF', 'E3F0FF'),
+    ('/srv/',       'Web/Data',  'F0FFF4', 'DFFFEB'),
+    ('/var/www/',   'Web-Root',  'F0FFF4', 'DFFFEB'),
+    ('/var/spool/', 'Spool',     'F8F0FF', 'F0E3FF'),
+]
+
 
 def _classify_event(event) -> Optional[str]:
     """Klassifiziert Event als REBOOT/LOGIN/CRASH — strukturiert zuerst, Keyword-Fallback."""
@@ -227,6 +269,55 @@ def _classify_event(event) -> Optional[str]:
     if any(kw in msg for kw in _LOGIN_KEYWORDS):  return 'LOGIN'
     if any(kw in msg for kw in _REBOOT_KEYWORDS): return 'REBOOT'
     return None
+
+
+def _classify_reboot_event(event) -> Optional[str]:
+    """Unterscheidet Boot- von Shutdown-Events innerhalb der REBOOT-Klasse."""
+    et = (event.event_type or '').lower()
+    if et in _BOOT_EVENT_TYPES:
+        return 'boot'
+    if et in _SHUTDOWN_EVENT_TYPES:
+        return 'shutdown'
+    msg = event.message.lower()
+    if any(kw in msg for kw in _BOOT_KEYWORDS_REBOOT):
+        return 'boot'
+    if any(kw in msg for kw in _SHUTDOWN_KEYWORDS):
+        return 'shutdown'
+    return None
+
+
+def _ip_type(ip: str) -> str:
+    """Klassifiziert IP als Extern / Intern / Loopback."""
+    if ip in ('127.0.0.1', '::1', 'localhost', '0.0.0.0'):
+        return 'Loopback'
+    if (ip.startswith('10.') or ip.startswith('192.168.')
+            or ip.startswith('127.')
+            or any(ip.startswith(f'172.{i}.') for i in range(16, 32))):
+        return 'Intern'
+    return 'Extern'
+
+
+def _fmt_duration(td) -> str:
+    """timedelta → 'Xd Xh Xm' oder '< 1 Min'."""
+    total_sec = int(abs(td.total_seconds()))
+    if total_sec < 60:
+        return '< 1 Min'
+    days    = total_sec // 86400
+    hours   = (total_sec % 86400) // 3600
+    minutes = (total_sec % 3600)  // 60
+    parts = []
+    if days:    parts.append(f'{days}d')
+    if hours:   parts.append(f'{hours}h')
+    if minutes: parts.append(f'{minutes}m')
+    return ' '.join(parts) or '< 1 Min'
+
+
+def _path_category(fp: str) -> tuple:
+    """Gibt (Kategorie, fill_hex_A, fill_hex_B) für einen Dateipfad zurück."""
+    for prefix, cat, fa, fb in _PATH_CATEGORY_MAP:
+        if fp.startswith(prefix):
+            return cat, fa, fb
+    return 'Sonstige', 'FFFFFF', 'F2F5F9'
 
 
 def _write_activity_csv(ctx: PipelineContext, case_dir: Path) -> None:
@@ -849,6 +940,573 @@ def _export_forensic_findings_excel(ctx: PipelineContext, case_dir: Path) -> Non
     out = case_dir / 'forensic_findings.xlsx'
     wb.save(str(out))
     log.info(f'  forensic_findings.xlsx → {out}  ({len(findings)} Befunde)')
+
+
+# ── IP-Session-Analyse Excel ─────────────────────────────────────────────────
+
+def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
+    """Aggregiert erfolgreiche Logins pro IP → ip_sessions.xlsx."""
+    if not ctx.events_db_path or not ctx.events_db_path.exists():
+        log.warning('  ip_sessions.xlsx: keine events.db vorhanden')
+        return
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        log.warning('openpyxl nicht installiert — ip_sessions.xlsx übersprungen')
+        return
+    from utils.event_store import EventStore
+
+    # ── Style-Helfer (gleich wie forensic_findings) ───────────────────────────
+    def _fill(h): return PatternFill(fill_type='solid', fgColor=h.lstrip('#'))
+    def _font(bold=False, color='000000', size=9):
+        return Font(name='Arial', bold=bold, color=color.lstrip('#'), size=size)
+    def _align(h='left', v='center', wrap=False):
+        return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
+    _side   = Side(style='thin', color='C8D5E8')
+    _BDR    = Border(left=_side, right=_side, top=_side, bottom=_side)
+    F_BANNER = _fill('0D1B2A'); F_HEADER = _fill('1B3A5C')
+    F_W = _fill('FFFFFF');     F_ALT    = _fill('F2F5F9')
+    F_EXT  = _fill('FFF4DC');  F_ROOT   = _fill('FFF5F5'); F_INT = _fill('F0F7FF')
+
+    # ── Aggregation: ip → Statistik ───────────────────────────────────────────
+    ip_data:    dict = {}
+    detail_rows: list = []
+
+    with EventStore(ctx.events_db_path) as store:
+        for event in store.iter_events():
+            if event.event_type not in _SUCCESS_LOGIN_TYPES:
+                continue
+            ip = (event.ip or '').strip()
+            if not ip:
+                continue
+            ts   = event.timestamp
+            user = (event.user or '').strip()
+            if ip not in ip_data:
+                ip_data[ip] = {
+                    'first': ts, 'last': ts, 'count': 0,
+                    'users': set(), 'sources': set(),
+                    'ip_type': _ip_type(ip),
+                }
+            d = ip_data[ip]
+            if ts < d['first']: d['first'] = ts
+            if ts > d['last']:  d['last']  = ts
+            d['count'] += 1
+            if user: d['users'].add(user)
+            d['sources'].add(event.source or '')
+            detail_rows.append({
+                'ip': ip, 'ts': ts, 'user': user,
+                'event_type': event.event_type,
+                'source': event.source or '',
+                'message': event.message[:200],
+            })
+
+    if not ip_data:
+        log.info('  ip_sessions.xlsx: keine erfolgreichen Logins mit IP — übersprungen')
+        return
+
+    _type_ord = {'Extern': 0, 'Intern': 1, 'Loopback': 2}
+    sorted_ips  = sorted(ip_data.items(),
+                         key=lambda x: (_type_ord.get(x[1]['ip_type'], 3), -x[1]['count']))
+    extern_ips  = [(ip, d) for ip, d in sorted_ips if d['ip_type'] == 'Extern']
+    detail_rows.sort(key=lambda r: (r['ip'], r['ts']))
+
+    HDR  = ['IP', 'Typ', 'Login_Anzahl', 'Erster_Login_UTC', 'Letzter_Login_UTC',
+            'Session_Dauer', 'Benutzer', 'Log-Quellen']
+    WID  = [16, 10, 14, 22, 22, 16, 35, 30]
+    LC   = get_column_letter(len(HDR))
+    HDR3 = ['IP', 'Typ', 'Timestamp_UTC', 'Benutzer', 'Event_Type', 'Quelle', 'Nachricht']
+    WID3 = [16, 10, 22, 18, 24, 22, 60]
+    LC3  = get_column_letter(len(HDR3))
+
+    def _hdr_row(ws, row, headers, widths):
+        for col, (h, w) in enumerate(zip(headers, widths), 1):
+            c = ws.cell(row, col, h)
+            c.font = _font(bold=True, color='FFFFFF', size=10)
+            c.fill = F_HEADER; c.alignment = _align(h='center'); c.border = _BDR
+            ws.column_dimensions[get_column_letter(col)].width = w
+        ws.row_dimensions[row].height = 20
+
+    def _banner(ws, row, text, lc):
+        ws.merge_cells(f'A{row}:{lc}{row}')
+        b = ws.cell(row, 1, text)
+        b.font = _font(bold=True, color='FFFFFF', size=12)
+        b.fill = F_BANNER; b.alignment = _align(h='center')
+        ws.row_dimensions[row].height = 24
+
+    def _ip_rows(ws, ip_list, start_row):
+        for ri, (ip, d) in enumerate(ip_list, start_row):
+            ipt    = d['ip_type']
+            has_root = 'root' in d['users']
+            rbg    = F_ROOT if (ipt == 'Extern' and has_root) \
+                else F_EXT  if ipt == 'Extern' \
+                else F_INT  if ipt == 'Intern' \
+                else (F_W if ri % 2 == 0 else F_ALT)
+            dur    = _fmt_duration(d['last'] - d['first']) \
+                if d['first'] != d['last'] else '< 1 Min'
+            vals   = [ip, ipt, d['count'],
+                      d['first'].strftime('%Y-%m-%d %H:%M:%S'),
+                      d['last'].strftime('%Y-%m-%d %H:%M:%S'),
+                      dur,
+                      ', '.join(sorted(d['users'])) or '—',
+                      ', '.join(sorted(d['sources'])) or '—']
+            for col, val in enumerate(vals, 1):
+                c = ws.cell(ri, col, val)
+                c.fill = rbg; c.border = _BDR
+                c.font = _font(bold=(col == 1 and ipt == 'Extern' and has_root), size=9)
+                c.alignment = _align(h='center' if col in (2, 3, 6) else 'left',
+                                     wrap=(col >= 7))
+            ws.row_dimensions[ri].height = 18
+
+    wb = Workbook()
+
+    # Sheet 1: IP-Übersicht
+    ws = wb.active; ws.title = 'IP-Übersicht'
+    ws.sheet_view.showGridLines = False
+    _banner(ws, 1,
+            f'IP-Session-Analyse — {len(ip_data)} IPs — '
+            f'{sum(d["count"] for _, d in sorted_ips)} erfolgreiche Logins', LC)
+    _hdr_row(ws, 2, HDR, WID)
+    ws.freeze_panes    = 'A3'
+    ws.auto_filter.ref = f'A2:{LC}{len(sorted_ips) + 2}'
+    _ip_rows(ws, sorted_ips, 3)
+
+    # Sheet 2: Externe IPs
+    ws2 = wb.create_sheet('Externe IPs')
+    ws2.sheet_view.showGridLines = False
+    _banner(ws2, 1, f'Externe IPs — {len(extern_ips)} IPs mit erfolgreichen Logins', LC)
+    _hdr_row(ws2, 2, HDR, WID)
+    ws2.freeze_panes = 'A3'
+    if extern_ips:
+        _ip_rows(ws2, extern_ips, 3)
+    else:
+        ws2.merge_cells(f'A3:{LC}3')
+        nc = ws2.cell(3, 1, 'Keine externen IPs mit erfolgreichen Logins gefunden.')
+        nc.font = _font(size=9, color='5F5E5A'); nc.alignment = _align(h='center')
+        nc.fill = F_ALT
+
+    # Sheet 3: Login-Detail
+    ws3 = wb.create_sheet('Login-Detail')
+    ws3.sheet_view.showGridLines = False
+    _banner(ws3, 1, f'Login-Detail — {len(detail_rows)} Ereignisse', LC3)
+    _hdr_row(ws3, 2, HDR3, WID3)
+    ws3.freeze_panes    = 'A3'
+    ws3.auto_filter.ref = f'A2:{LC3}{min(len(detail_rows) + 2, 65536)}'
+    MAX_DETAIL = 5000
+    for ri, row in enumerate(detail_rows[:MAX_DETAIL], 3):
+        ipt = _ip_type(row['ip'])
+        hr  = row['user'] == 'root'
+        rbg = F_ROOT if (ipt == 'Extern' and hr) \
+            else F_EXT if ipt == 'Extern' \
+            else F_INT if ipt == 'Intern' \
+            else (F_W if ri % 2 == 0 else F_ALT)
+        for col, val in enumerate([row['ip'], ipt,
+                                    row['ts'].strftime('%Y-%m-%d %H:%M:%S'),
+                                    row['user'] or '—', row['event_type'],
+                                    row['source'], row['message']], 1):
+            c = ws3.cell(ri, col, val)
+            c.fill = rbg; c.border = _BDR; c.font = _font(size=9)
+            c.alignment = _align(h='left', wrap=(col == 7))
+        ws3.row_dimensions[ri].height = 18
+    if len(detail_rows) > MAX_DETAIL:
+        nr = MAX_DETAIL + 3
+        ws3.merge_cells(f'A{nr}:{LC3}{nr}')
+        nc = ws3.cell(nr, 1,
+                      f'... {len(detail_rows) - MAX_DETAIL} weitere Einträge '
+                      f'abgeschnitten (Limit: {MAX_DETAIL})')
+        nc.font = _font(size=9, color='5F5E5A'); nc.alignment = _align(h='center')
+
+    out = case_dir / 'ip_sessions.xlsx'
+    wb.save(str(out))
+    log.info(f'  ip_sessions.xlsx → {out}  ({len(ip_data)} IPs, {len(detail_rows)} Login-Events)')
+
+
+# ── Reboot-Session-Analyse Excel ─────────────────────────────────────────────
+
+def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
+    """Paart Boot/Shutdown-Events zu Sessions → reboot_sessions.xlsx."""
+    if not ctx.events_db_path or not ctx.events_db_path.exists():
+        log.warning('  reboot_sessions.xlsx: keine events.db vorhanden')
+        return
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        log.warning('openpyxl nicht installiert — reboot_sessions.xlsx übersprungen')
+        return
+    from utils.event_store import EventStore
+
+    def _fill(h): return PatternFill(fill_type='solid', fgColor=h.lstrip('#'))
+    def _font(bold=False, color='000000', size=9):
+        return Font(name='Arial', bold=bold, color=color.lstrip('#'), size=size)
+    def _align(h='left', v='center', wrap=False):
+        return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
+    _side    = Side(style='thin', color='C8D5E8')
+    _BDR     = Border(left=_side, right=_side, top=_side, bottom=_side)
+    F_BANNER = _fill('0D1B2A'); F_HEADER = _fill('1B3A5C')
+    F_W      = _fill('FFFFFF'); F_ALT    = _fill('F2F5F9')
+    F_SHORT  = _fill('FFF4DC'); F_UNCLEAN= _fill('FFF5F5')
+    _sev_badge = {
+        'critical': _fill('A32D2D'), 'high':   _fill('BA7517'),
+        'medium':   _fill('5F5E5A'), 'low':    _fill('3A6B3A'),
+        'info':     _fill('3A6B3A'),
+    }
+
+    # ── Pass 1: Reboot-Events sammeln + Session-Pairing ───────────────────────
+    reboot_events = []
+    with EventStore(ctx.events_db_path) as store:
+        for event in store.iter_events():
+            if _classify_event(event) == 'REBOOT':
+                kind = _classify_reboot_event(event)
+                if kind:
+                    reboot_events.append((event, kind))
+
+    if not reboot_events:
+        log.info('  reboot_sessions.xlsx: keine Boot/Shutdown-Events — übersprungen')
+        return
+
+    reboot_events.sort(key=lambda x: _to_utc(x[0].timestamp))
+
+    # Pairing: boot → ... → shutdown
+    sessions = []
+    current_boot = None
+    for event, kind in reboot_events:
+        ts = event.timestamp
+        if kind == 'boot':
+            if current_boot is not None:
+                sessions.append({'boot': current_boot, 'shutdown': None, 'unclean': True,
+                                  'events': [], 'total': 0})
+            current_boot = ts
+        elif kind == 'shutdown':
+            if current_boot is not None:
+                sessions.append({'boot': current_boot, 'shutdown': ts, 'unclean': False,
+                                  'events': [], 'total': 0})
+                current_boot = None
+            else:
+                sessions.append({'boot': None, 'shutdown': ts, 'unclean': False,
+                                  'events': [], 'total': 0})
+    if current_boot is not None:
+        sessions.append({'boot': current_boot, 'shutdown': None, 'unclean': False,
+                          'events': [], 'total': 0})
+
+    if not sessions:
+        log.info('  reboot_sessions.xlsx: keine Sessions aufgebaut — übersprungen')
+        return
+
+    # ── Pass 2: Events den Sessions zuordnen (single pass) ────────────────────
+    MAX_PER_SESSION = 2000
+    with EventStore(ctx.events_db_path) as store:
+        for event in store.iter_events():
+            ts  = _to_utc(event.timestamp)
+            sev = (getattr(event, 'severity', '') or '').lower()
+            for sess in sessions:
+                b = _to_utc(sess['boot'])     if sess['boot']     else None
+                s = _to_utc(sess['shutdown']) if sess['shutdown'] else None
+                if b and ts < b: continue
+                if s and ts > s: continue
+                sess['total'] += 1
+                if sev in ('critical', 'high'):
+                    sess['events'].append(event)
+                elif len(sess['events']) < MAX_PER_SESSION:
+                    sess['events'].append(event)
+                break   # event gehört zur ersten passenden Session
+
+    wb   = Workbook()
+    HDR  = ['#', 'Boot_Start_UTC', 'Shutdown_UTC', 'Laufzeit', 'Ereignisse', 'Hinweis']
+    WID  = [5, 22, 22, 16, 12, 50]
+    LC   = get_column_letter(len(HDR))
+
+    # ── Sheet 1: Übersicht ────────────────────────────────────────────────────
+    ws = wb.active; ws.title = 'Übersicht'
+    ws.sheet_view.showGridLines = False
+    ws.merge_cells(f'A1:{LC}1')
+    b = ws.cell(1, 1, f'Reboot-Session-Analyse — {len(sessions)} Betriebszeiträume')
+    b.font = _font(bold=True, color='FFFFFF', size=12)
+    b.fill = F_BANNER; b.alignment = _align(h='center')
+    ws.row_dimensions[1].height = 24
+    for col, (h, w) in enumerate(zip(HDR, WID), 1):
+        c = ws.cell(2, col, h)
+        c.font = _font(bold=True, color='FFFFFF', size=10)
+        c.fill = F_HEADER; c.alignment = _align(h='center'); c.border = _BDR
+        ws.column_dimensions[get_column_letter(col)].width = w
+    ws.row_dimensions[2].height = 20
+    ws.freeze_panes = 'A3'
+
+    for ri, (i, sess) in enumerate(enumerate(sessions, 1), 3):
+        bt = sess['boot']; st = sess['shutdown']
+        unclean = sess.get('unclean', False)
+        if bt and st:
+            td      = _to_utc(st) - _to_utc(bt)
+            dur     = _fmt_duration(td)
+            is_short = td.total_seconds() < 1800   # < 30 Min
+        elif bt:
+            dur = 'Kein Shutdown'; is_short = False
+        elif st:
+            dur = 'Kein Boot-Beginn'; is_short = False
+        else:
+            dur = '?'; is_short = False
+
+        if unclean:
+            hint = '⚠ Ungeplanter Neustart (kein Shutdown vor nächstem Boot)'
+        elif not st and bt:
+            hint = 'Letzter bekannter Boot — kein sauberer Shutdown dokumentiert'
+        elif not bt:
+            hint = 'Shutdown vor erstem dokumentierten Boot'
+        elif is_short:
+            hint = f'⚠ Kurze Laufzeit ({dur}) — verdächtiger Neustart'
+        else:
+            hint = ''
+
+        rbg = F_UNCLEAN if unclean else F_SHORT if is_short \
+            else (F_W if ri % 2 == 0 else F_ALT)
+        for col, val in enumerate([
+            i,
+            bt.strftime('%Y-%m-%d %H:%M:%S') if bt else '—',
+            st.strftime('%Y-%m-%d %H:%M:%S') if st else '—',
+            dur, sess['total'], hint,
+        ], 1):
+            c = ws.cell(ri, col, val)
+            c.fill = rbg; c.border = _BDR
+            c.font = _font(size=9, bold=(col == 1))
+            c.alignment = _align(h='center' if col in (1, 4, 5) else 'left',
+                                  wrap=(col == 6))
+        ws.row_dimensions[ri].height = 20
+
+    # ── Pro-Reboot-Sheets ─────────────────────────────────────────────────────
+    MAX_SHEETS        = 20
+    MAX_SHEET_ROWS    = 500
+    HDR_D = ['Timestamp_UTC', 'Severity', 'Event_Type', 'Benutzer', 'IP', 'Quelle', 'Nachricht']
+    WID_D = [22, 12, 24, 15, 16, 20, 70]
+    LC_D  = get_column_letter(len(HDR_D))
+    _sev_ord = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4}
+
+    for sess_nr, sess in enumerate(sessions[:MAX_SHEETS], 1):
+        if not sess['events']:
+            continue
+        bt = sess['boot']; st = sess['shutdown']
+        evs = sess['events']
+        # HIGH/CRITICAL immer, dann Rest sortiert bis MAX_SHEET_ROWS
+        if len(evs) > MAX_SHEET_ROWS:
+            hi   = [e for e in evs if (getattr(e,'severity','') or '').lower() in ('critical','high')]
+            rest = [e for e in evs if (getattr(e,'severity','') or '').lower() not in ('critical','high')]
+            rest.sort(key=lambda e: (_sev_ord.get((getattr(e,'severity','') or '').lower(), 4),
+                                     _to_utc(e.timestamp)))
+            evs = hi + rest[:max(0, MAX_SHEET_ROWS - len(hi))]
+        evs.sort(key=lambda e: _to_utc(e.timestamp))
+
+        ws_r = wb.create_sheet(f'Reboot_{sess_nr}')
+        ws_r.sheet_view.showGridLines = False
+        bs = bt.strftime('%Y-%m-%d %H:%M') if bt else '?'
+        ss = st.strftime('%Y-%m-%d %H:%M') if st else '?'
+        ws_r.merge_cells(f'A1:{LC_D}1')
+        br = ws_r.cell(1, 1,
+                       f'Reboot {sess_nr}  Boot: {bs}  Shutdown: {ss}  '
+                       f'({sess["total"]:,} Ereignisse)')
+        br.font = _font(bold=True, color='FFFFFF', size=11)
+        br.fill = F_BANNER; br.alignment = _align(h='center')
+        ws_r.row_dimensions[1].height = 22
+        for col, (h, w) in enumerate(zip(HDR_D, WID_D), 1):
+            c = ws_r.cell(2, col, h)
+            c.font = _font(bold=True, color='FFFFFF', size=10)
+            c.fill = F_HEADER; c.alignment = _align(h='center'); c.border = _BDR
+            ws_r.column_dimensions[get_column_letter(col)].width = w
+        ws_r.row_dimensions[2].height = 20
+        ws_r.freeze_panes = 'A3'
+
+        for ri, event in enumerate(evs, 3):
+            sev   = (getattr(event, 'severity', 'info') or 'info').lower()
+            badge = _sev_badge.get(sev, _fill('5F5E5A'))
+            rbg   = F_W if ri % 2 == 0 else F_ALT
+            for col, val in enumerate([
+                event.timestamp.strftime('%Y-%m-%d %H:%M:%S') if event.timestamp else '',
+                sev.upper(), event.event_type or '',
+                event.user or '', event.ip or '',
+                event.source or '', event.message[:200],
+            ], 1):
+                c = ws_r.cell(ri, col, val)
+                c.border = _BDR
+                c.alignment = _align(h='center' if col == 2 else 'left', wrap=(col == 7))
+                if col == 2:
+                    c.fill = badge; c.font = _font(bold=True, color='FFFFFF', size=9)
+                else:
+                    c.fill = rbg; c.font = _font(size=9)
+            ws_r.row_dimensions[ri].height = 18
+
+        if sess['total'] > MAX_SHEET_ROWS:
+            nr = len(evs) + 3
+            ws_r.merge_cells(f'A{nr}:{LC_D}{nr}')
+            nc = ws_r.cell(nr, 1,
+                           f'Hinweis: {sess["total"] - len(evs):,} weitere Ereignisse '
+                           f'nicht angezeigt (HIGH/CRITICAL priorisiert, Limit: {MAX_SHEET_ROWS})')
+            nc.font = _font(size=9, color='5F5E5A'); nc.alignment = _align(h='center')
+
+    out = case_dir / 'reboot_sessions.xlsx'
+    wb.save(str(out))
+    log.info(
+        f'  reboot_sessions.xlsx → {out}  '
+        f'({len(sessions)} Sessions, {sum(s["total"] for s in sessions)} Events gesamt)'
+    )
+
+
+# ── Gefilterte Filesystem-Timeline Excel ─────────────────────────────────────
+
+def _write_filtered_filesystem_timeline_excel(ctx: PipelineContext, case_dir: Path) -> None:
+    """Gefilterte MACtime-Timeline (nur relevante Pfade) → filtered_filesystem_timeline.xlsx."""
+    if not ctx.events_db_path or not ctx.events_db_path.exists():
+        log.warning('  filtered_filesystem_timeline.xlsx: keine events.db vorhanden')
+        return
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        log.warning('openpyxl nicht installiert — filtered_filesystem_timeline.xlsx übersprungen')
+        return
+    from utils.event_store import EventStore
+    from collections import defaultdict
+
+    def _fill(h): return PatternFill(fill_type='solid', fgColor=h.lstrip('#'))
+    def _font(bold=False, color='000000', size=9):
+        return Font(name='Arial', bold=bold, color=color.lstrip('#'), size=size)
+    def _align(h='left', v='center', wrap=False):
+        return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
+    _side    = Side(style='thin', color='C8D5E8')
+    _BDR     = Border(left=_side, right=_side, top=_side, bottom=_side)
+    F_BANNER = _fill('0D1B2A'); F_HEADER = _fill('1B3A5C')
+    _sev_badge = {
+        'critical': _fill('A32D2D'), 'high':   _fill('BA7517'),
+        'medium':   _fill('5F5E5A'), 'low':    _fill('3A6B3A'),
+        'info':     _fill('3A6B3A'),
+    }
+
+    # Cross-Reference: Dateipfade aus forensic_findings
+    finding_paths = {f.file for f in (ctx.forensic_findings or []) if f.file}
+
+    filtered = []
+    with EventStore(ctx.events_db_path) as store:
+        for event in store.iter_events():
+            if event.source != 'mactime':
+                continue
+            fp  = event.file_path or ''
+            sev = (event.severity or 'info').lower()
+            # Immer einschließen: HIGH/CRITICAL oder in forensic_findings
+            if sev in ('high', 'critical') or fp in finding_paths:
+                filtered.append(event)
+                continue
+            # Whitelist
+            if not any(fp.startswith(p) for p in _INTERESTING_PREFIXES):
+                continue
+            # Blacklist
+            if any(fp.startswith(p) for p in _NOISE_PREFIXES):
+                continue
+            filtered.append(event)
+
+    if not filtered:
+        log.info('  filtered_filesystem_timeline.xlsx: keine relevanten MACtime-Events — übersprungen')
+        return
+
+    filtered.sort(key=lambda e: _to_utc(e.timestamp))
+
+    # Verzeichnis-Statistik
+    dir_stats: dict = defaultdict(lambda: {'count': 0, 'first': None, 'last': None})
+    for event in filtered:
+        from pathlib import PurePosixPath
+        fp = event.file_path or ''
+        d  = str(PurePosixPath(fp).parent) if fp else '?'
+        ds = dir_stats[d]
+        ds['count'] += 1
+        ts = _to_utc(event.timestamp)
+        if ds['first'] is None or ts < ds['first']: ds['first'] = ts
+        if ds['last']  is None or ts > ds['last']:  ds['last']  = ts
+    dir_sorted = sorted(dir_stats.items(), key=lambda x: -x[1]['count'])
+
+    wb  = Workbook()
+    HDR = ['Timestamp_UTC', 'MACB_Type', 'Severity', 'Kategorie', 'Datei_Pfad', 'Nachricht']
+    WID = [22, 12, 12, 14, 65, 60]
+    LC  = get_column_letter(len(HDR))
+
+    # ── Sheet 1: Timeline ─────────────────────────────────────────────────────
+    ws = wb.active; ws.title = 'Timeline'
+    ws.sheet_view.showGridLines = False
+    ws.merge_cells(f'A1:{LC}1')
+    b = ws.cell(1, 1,
+                f'Gefilterte Filesystem-Timeline — {len(filtered):,} relevante Einträge')
+    b.font = _font(bold=True, color='FFFFFF', size=12)
+    b.fill = F_BANNER; b.alignment = _align(h='center')
+    ws.row_dimensions[1].height = 24
+    for col, (h, w) in enumerate(zip(HDR, WID), 1):
+        c = ws.cell(2, col, h)
+        c.font = _font(bold=True, color='FFFFFF', size=10)
+        c.fill = F_HEADER; c.alignment = _align(h='center'); c.border = _BDR
+        ws.column_dimensions[get_column_letter(col)].width = w
+    ws.row_dimensions[2].height = 20
+    ws.freeze_panes    = 'A3'
+    ws.auto_filter.ref = f'A2:{LC}{len(filtered) + 2}'
+
+    for ri, event in enumerate(filtered, 3):
+        fp      = event.file_path or ''
+        sev     = (event.severity or 'info').lower()
+        cat, fa, fb = _path_category(fp)
+        rbg     = _fill(fa) if ri % 2 == 0 else _fill(fb)
+        for col, val in enumerate([
+            event.timestamp.strftime('%Y-%m-%d %H:%M:%S') if event.timestamp else '',
+            event.event_type or '',
+            sev.upper(), cat, fp, event.message[:200],
+        ], 1):
+            c = ws.cell(ri, col, val)
+            c.border = _BDR
+            c.alignment = _align(h='center' if col in (2, 3, 4) else 'left',
+                                  wrap=(col == 6))
+            if col == 3:
+                c.fill = _sev_badge.get(sev, _fill('5F5E5A'))
+                c.font = _font(bold=True, color='FFFFFF', size=9)
+            else:
+                c.fill = rbg; c.font = _font(size=9)
+        ws.row_dimensions[ri].height = 18
+
+    # ── Sheet 2: Verzeichnis-Übersicht ────────────────────────────────────────
+    ws2 = wb.create_sheet('Verzeichnis-Übersicht')
+    ws2.sheet_view.showGridLines = False
+    for col, w in enumerate([65, 14, 22, 22, 14], 1):
+        ws2.column_dimensions[get_column_letter(col)].width = w
+    ws2.merge_cells('A1:E1')
+    b2 = ws2.cell(1, 1,
+                  f'Verzeichnis-Übersicht — {len(dir_sorted)} Verzeichnisse '
+                  f'mit relevanten MACtime-Events')
+    b2.font = _font(bold=True, color='FFFFFF', size=12)
+    b2.fill = F_BANNER; b2.alignment = _align(h='center')
+    ws2.row_dimensions[1].height = 24
+    for col, lbl in enumerate(
+            ['Verzeichnis', 'Anzahl_Events', 'Ersten_Timestamp', 'Letzten_Timestamp', 'Kategorie'],
+            1):
+        c = ws2.cell(2, col, lbl)
+        c.font = _font(bold=True, color='FFFFFF', size=10)
+        c.fill = F_HEADER; c.alignment = _align(h='center'); c.border = _BDR
+    ws2.row_dimensions[2].height = 20
+    ws2.freeze_panes = 'A3'
+
+    for ri, (dirpath, ds) in enumerate(dir_sorted, 3):
+        cat, fa, _ = _path_category(dirpath + '/')
+        rbg        = _fill(fa)
+        for col, val in enumerate([
+            dirpath, ds['count'],
+            ds['first'].strftime('%Y-%m-%d %H:%M:%S') if ds['first'] else '',
+            ds['last'].strftime('%Y-%m-%d %H:%M:%S')  if ds['last']  else '',
+            cat,
+        ], 1):
+            c = ws2.cell(ri, col, val)
+            c.fill = rbg; c.border = _BDR; c.font = _font(size=9)
+            c.alignment = _align(h='center' if col == 2 else 'left')
+        ws2.row_dimensions[ri].height = 18
+
+    out = case_dir / 'filtered_filesystem_timeline.xlsx'
+    wb.save(str(out))
+    log.info(
+        f'  filtered_filesystem_timeline.xlsx → {out}  '
+        f'({len(filtered):,} gefilterte Events, {len(dir_sorted)} Verzeichnisse)'
+    )
 
 
 # ── PDF Report ───────────────────────────────────────────────────────────────
