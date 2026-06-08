@@ -971,6 +971,15 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
     F_EXT  = _fill('FFF4DC');  F_ROOT   = _fill('FFF5F5'); F_INT = _fill('F0F7FF')
 
     # ── Aggregation: ip → Statistik ───────────────────────────────────────────
+    def _src_cat(source: str) -> str:
+        """Kategorisiert Log-Quelle in auth / journal / wtmp."""
+        s = (source or '').lower()
+        if 'auth' in s:                          return 'auth'
+        if 'wtmp' in s or 'utmp' in s or 'lastlog' in s: return 'wtmp'
+        if 'journal' in s or 'systemd' in s:     return 'journal'
+        if 'syslog' in s or 'messages' in s:     return 'journal'
+        return 'other'
+
     ip_data:    dict = {}
     detail_rows: list = []
 
@@ -987,6 +996,7 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
                 ip_data[ip] = {
                     'first': ts, 'last': ts, 'count': 0,
                     'users': set(), 'sources': set(),
+                    'source_cats': set(),
                     'ip_type': _ip_type(ip),
                 }
             d = ip_data[ip]
@@ -995,6 +1005,7 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
             d['count'] += 1
             if user: d['users'].add(user)
             d['sources'].add(event.source or '')
+            d['source_cats'].add(_src_cat(event.source or ''))
             detail_rows.append({
                 'ip': ip, 'ts': ts, 'user': user,
                 'event_type': event.event_type,
@@ -1013,8 +1024,8 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
     detail_rows.sort(key=lambda r: (r['ip'], r['ts']))
 
     HDR  = ['IP', 'Typ', 'Login_Anzahl', 'Erster_Login_UTC', 'Letzter_Login_UTC',
-            'Session_Dauer', 'Benutzer', 'Log-Quellen']
-    WID  = [16, 10, 14, 22, 22, 16, 35, 30]
+            'Session_Dauer', 'Benutzer', 'Log-Quellen', 'In_AuthLog', 'In_Journal', 'In_Wtmp']
+    WID  = [16, 10, 14, 22, 22, 16, 35, 30, 12, 12, 12]
     LC   = get_column_letter(len(HDR))
     HDR3 = ['IP', 'Typ', 'Timestamp_UTC', 'Benutzer', 'Event_Type', 'Quelle', 'Nachricht']
     WID3 = [16, 10, 22, 18, 24, 22, 60]
@@ -1045,12 +1056,16 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
                 else (F_W if ri % 2 == 0 else F_ALT)
             dur    = _fmt_duration(d['last'] - d['first']) \
                 if d['first'] != d['last'] else '< 1 Min'
+            scats  = d.get('source_cats', set())
             vals   = [ip, ipt, d['count'],
                       d['first'].strftime('%Y-%m-%d %H:%M:%S'),
                       d['last'].strftime('%Y-%m-%d %H:%M:%S'),
                       dur,
                       ', '.join(sorted(d['users'])) or '—',
-                      ', '.join(sorted(d['sources'])) or '—']
+                      ', '.join(sorted(d['sources'])) or '—',
+                      '✓' if 'auth'    in scats else '✗',
+                      '✓' if 'journal' in scats else '✗',
+                      '✓' if 'wtmp'    in scats else '✗']
             for col, val in enumerate(vals, 1):
                 c = ws.cell(ri, col, val)
                 c.fill = rbg; c.border = _BDR
@@ -1153,6 +1168,29 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
         'medium':   _fill('5F5E5A'), 'low':    _fill('3A6B3A'),
         'info':     _fill('3A6B3A'),
     }
+
+    # Quell-Pfad-Mapping: Log-Typ → vollständiger Dateipfad auf dem Image
+    _SRC_PATH_MAP = {
+        'syslog':   '/var/log/syslog',
+        'journal':  '/var/log/journal/ (systemd)',
+        'auth':     '/var/log/auth.log',
+        'auth.log': '/var/log/auth.log',
+        'kern':     '/var/log/kern.log',
+        'kern.log': '/var/log/kern.log',
+        'daemon':   '/var/log/daemon.log',
+        'boot':     '/var/log/boot.log',
+        'messages': '/var/log/messages',
+        'wtmp':     '/var/log/wtmp',
+        'utmp':     '/var/run/utmp',
+        'btmp':     '/var/log/btmp',
+        'lastlog':  '/var/log/lastlog',
+        'dpkg':     '/var/log/dpkg.log',
+        'apt':      '/var/log/apt/history.log',
+    }
+
+    def _src_path_reboot(source: str) -> str:
+        s = (source or '').lower().strip()
+        return _SRC_PATH_MAP.get(s, source or '—')
 
     # ── Pass 1: Reboot-Events sammeln + Session-Pairing ───────────────────────
     reboot_events = []
@@ -1323,7 +1361,7 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
                 event.timestamp.strftime('%Y-%m-%d %H:%M:%S') if event.timestamp else '',
                 sev.upper(), event.event_type or '',
                 event.user or '', event.ip or '',
-                event.source or '', event.message[:200],
+                _src_path_reboot(event.source), event.message[:200],
             ], 1):
                 c = ws_r.cell(ri, col, val)
                 c.border = _BDR
@@ -1422,9 +1460,62 @@ def _write_filtered_filesystem_timeline_excel(ctx: PipelineContext, case_dir: Pa
         if ds['last']  is None or ts > ds['last']:  ds['last']  = ts
     dir_sorted = sorted(dir_stats.items(), key=lambda x: -x[1]['count'])
 
+    # ── Gruppierung: eine Zeile pro Datei mit allen 4 Timestamps ────────────
+    from collections import defaultdict as _dd
+    _SEV_ORD_TL = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4}
+
+    file_ts: dict = _dd(lambda: {
+        'm': None, 'a': None, 'c': None, 'b': None,
+        'severity': 'info', 'category': 'Sonstige',
+        'fill_a': 'FFFFFF', 'fill_b': 'F2F5F9',
+    })
+
+    for event in filtered:
+        fp  = (event.file_path or '').strip()
+        et  = (event.event_type or '').lower().replace('filesystem_', '')
+        sev = (event.severity or 'info').lower()
+        ts  = _to_utc(event.timestamp) if event.timestamp else None
+
+        for letter in ('m', 'a', 'c', 'b'):
+            if letter in et and ts is not None:
+                existing = file_ts[fp][letter]
+                if existing is None or ts > existing:
+                    file_ts[fp][letter] = ts
+
+        if _SEV_ORD_TL.get(sev, 4) < _SEV_ORD_TL.get(file_ts[fp]['severity'], 4):
+            file_ts[fp]['severity'] = sev
+
+        cat, fa, fb = _path_category(fp)
+        file_ts[fp]['category'] = cat
+        file_ts[fp]['fill_a']   = fa
+        file_ts[fp]['fill_b']   = fb
+
+    def _fmt_ts_tl(ts):
+        return ts.strftime('%Y-%m-%d %H:%M:%S') if ts else '—'
+
+    def _auffaelligkeit(m, a, c, b):
+        hints = []
+        if m and c:
+            diff = (_to_utc(c) - _to_utc(m)).total_seconds()
+            if diff > 3600:
+                hints.append('⚠ ctime > mtime+1h → Timestomping?')
+        if b and m and _to_utc(b) > _to_utc(m):
+            hints.append('⚠ btime > mtime → Datei kopiert?')
+        if m and _to_utc(m).year < 2000:
+            hints.append('🔴 mtime vor 2000 → Verdächtig')
+        if b and _to_utc(b).year < 2000:
+            hints.append('🔴 btime vor 2000 → Verdächtig')
+        return ' | '.join(hints) if hints else '—'
+
+    file_rows = sorted(
+        [{'fp': fp, **data} for fp, data in file_ts.items()],
+        key=lambda r: (_SEV_ORD_TL.get(r['severity'], 4), r['fp'])
+    )
+
     wb  = Workbook()
-    HDR = ['Timestamp_UTC', 'MACB_Type', 'Severity', 'Kategorie', 'Datei_Pfad', 'Nachricht']
-    WID = [22, 12, 12, 14, 65, 60]
+    HDR = ['Datei_Pfad', 'mtime_UTC', 'atime_UTC', 'ctime_UTC', 'btime_UTC',
+           'Auffälligkeit', 'Severity', 'Kategorie']
+    WID = [60, 22, 22, 22, 22, 42, 12, 14]
     LC  = get_column_letter(len(HDR))
 
     # ── Sheet 1: Timeline ─────────────────────────────────────────────────────
@@ -1432,7 +1523,9 @@ def _write_filtered_filesystem_timeline_excel(ctx: PipelineContext, case_dir: Pa
     ws.sheet_view.showGridLines = False
     ws.merge_cells(f'A1:{LC}1')
     b = ws.cell(1, 1,
-                f'Gefilterte Filesystem-Timeline — {len(filtered):,} relevante Einträge')
+                f'Gefilterte Filesystem-Timeline — {len(file_rows):,} Dateien '
+                f'({len(filtered):,} MACB-Events gruppiert) — '
+                f'Quelle: TSK fls -m → mactime (Inode-Metadaten direkt aus Disk-Image)')
     b.font = _font(bold=True, color='FFFFFF', size=12)
     b.fill = F_BANNER; b.alignment = _align(h='center')
     ws.row_dimensions[1].height = 24
@@ -1443,28 +1536,37 @@ def _write_filtered_filesystem_timeline_excel(ctx: PipelineContext, case_dir: Pa
         ws.column_dimensions[get_column_letter(col)].width = w
     ws.row_dimensions[2].height = 20
     ws.freeze_panes    = 'A3'
-    ws.auto_filter.ref = f'A2:{LC}{len(filtered) + 2}'
+    ws.auto_filter.ref = f'A2:{LC}{len(file_rows) + 2}'
 
-    for ri, event in enumerate(filtered, 3):
-        fp      = event.file_path or ''
-        sev     = (event.severity or 'info').lower()
-        cat, fa, fb = _path_category(fp)
-        rbg     = _fill(fa) if ri % 2 == 0 else _fill(fb)
+    for ri, row in enumerate(file_rows, 3):
+        sev = row['severity']
+        rbg = _fill(row['fill_a']) if ri % 2 == 0 else _fill(row['fill_b'])
+        auf = _auffaelligkeit(row['m'], row['a'], row['c'], row['b'])
         for col, val in enumerate([
-            event.timestamp.strftime('%Y-%m-%d %H:%M:%S') if event.timestamp else '',
-            event.event_type or '',
-            sev.upper(), cat, fp, event.message[:200],
+            row['fp'],
+            _fmt_ts_tl(row['m']),
+            _fmt_ts_tl(row['a']),
+            _fmt_ts_tl(row['c']),
+            _fmt_ts_tl(row['b']),
+            auf,
+            sev.upper(),
+            row['category'],
         ], 1):
             c = ws.cell(ri, col, val)
             c.border = _BDR
-            c.alignment = _align(h='center' if col in (2, 3, 4) else 'left',
-                                  wrap=(col == 6))
-            if col == 3:
+            c.alignment = _align(
+                h='center' if col in (7, 8) else 'left',
+                wrap=(col == 6),
+            )
+            if col == 7:
                 c.fill = _sev_badge.get(sev, _fill('5F5E5A'))
                 c.font = _font(bold=True, color='FFFFFF', size=9)
+            elif col == 6 and auf != '—':
+                c.fill = _fill('FFF5F5') if ri % 2 == 0 else _fill('FFEDED')
+                c.font = _font(size=9, color='A32D2D')
             else:
                 c.fill = rbg; c.font = _font(size=9)
-        ws.row_dimensions[ri].height = 18
+        ws.row_dimensions[ri].height = 20
 
     # ── Sheet 2: Verzeichnis-Übersicht ────────────────────────────────────────
     ws2 = wb.create_sheet('Verzeichnis-Übersicht')
@@ -1500,6 +1602,151 @@ def _write_filtered_filesystem_timeline_excel(ctx: PipelineContext, case_dir: Pa
             c.fill = rbg; c.border = _BDR; c.font = _font(size=9)
             c.alignment = _align(h='center' if col == 2 else 'left')
         ws2.row_dimensions[ri].height = 18
+
+    # ── Sheet 3: Legende ─────────────────────────────────────────────────────
+    ws3 = wb.create_sheet('Legende')
+    ws3.sheet_view.showGridLines = False
+    ws3.column_dimensions['A'].width = 10   # Kürzel
+    ws3.column_dimensions['B'].width = 10   # Name
+    ws3.column_dimensions['C'].width = 62   # Bedeutung
+    ws3.column_dimensions['D'].width = 36   # Manipulierbar
+
+    # Banner
+    ws3.merge_cells('A1:D1')
+    b3 = ws3.cell(1, 1, 'Legende — MACB-Timestamps & Filterkriterien')
+    b3.font      = _font(bold=True, color='FFFFFF', size=12)
+    b3.fill      = F_BANNER
+    b3.alignment = _align(h='center')
+    ws3.row_dimensions[1].height = 24
+
+    # Abschnitt 1: MACB-Tabelle
+    ws3.merge_cells('A2:D2')
+    s1 = ws3.cell(2, 1, 'MACB-Timestamp-Typen')
+    s1.font      = _font(bold=True, color='FFFFFF', size=10)
+    s1.fill      = F_HEADER
+    s1.alignment = _align(h='left')
+    ws3.row_dimensions[2].height = 20
+
+    # Header
+    F_W_leg  = _fill('FFFFFF')
+    F_ALT_leg = _fill('F2F5F9')
+    for col, lbl in enumerate(['Kürzel', 'Name', 'Bedeutung', 'Manipulierbar?'], 1):
+        c = ws3.cell(3, col, lbl)
+        c.font      = _font(bold=True, color='FFFFFF', size=10)
+        c.fill      = F_HEADER
+        c.alignment = _align(h='center')
+        c.border    = _BDR
+    ws3.row_dimensions[3].height = 20
+
+    MACB_LEGEND = [
+        ('m', 'mtime',
+         'Wann wurde der Dateiinhalt zuletzt geändert?',
+         '✅ Ja — mit touch -t manipulierbar'),
+        ('a', 'atime',
+         'Wann wurde die Datei zuletzt gelesen / geöffnet?',
+         '✅ Ja — mit touch -a manipulierbar'),
+        ('c', 'ctime',
+         'Wann wurden die Metadaten zuletzt geändert (Rechte, Eigentümer, Links)?',
+         '❌ Nein — wird nur vom Kernel gesetzt, nicht direkt manipulierbar'),
+        ('b', 'btime',
+         'Wann wurde die Datei erstellt (Birth/Creation Time)?',
+         '✅ Eingeschränkt — nicht auf allen Dateisystemen verfügbar'),
+    ]
+
+    for i, (kurzel, name, bedeutung, manip) in enumerate(MACB_LEGEND, 4):
+        rbg = F_W_leg if i % 2 == 0 else F_ALT_leg
+        for col, val in enumerate([kurzel, name, bedeutung, manip], 1):
+            c        = ws3.cell(i, col, val)
+            c.fill   = rbg
+            c.font   = _font(bold=(col == 1), size=9)
+            c.border = _BDR
+            c.alignment = _align(h='center' if col <= 2 else 'left', wrap=(col >= 3))
+        ws3.row_dimensions[i].height = 28
+
+    # Abschnitt 2: Forensische Bedeutung
+    ws3.merge_cells('A9:D9')
+    s2 = ws3.cell(9, 1, 'Forensische Bedeutung von Timestamp-Kombinationen')
+    s2.font      = _font(bold=True, color='FFFFFF', size=10)
+    s2.fill      = F_HEADER
+    s2.alignment = _align(h='left')
+    ws3.row_dimensions[9].height = 20
+
+    FORENSIC_HINTS = [
+        ('ctime > mtime + 1h',
+         'Verdacht auf Timestomping — mtime wurde nachträglich mit touch -t zurückgesetzt. '
+         'ctime kann nicht manuell manipuliert werden und verrät den echten Änderungszeitpunkt.'),
+        ('btime viel neuer als atime',
+         'Datei wurde wahrscheinlich kopiert, nicht neu erstellt. '
+         'Beim Kopieren wird btime neu gesetzt, atime bleibt vom Original erhalten.'),
+        ('mtime vor Installationsdatum des Systems',
+         'Unrealistischer Timestamp — deutet auf manuelle Manipulation (Timestomping) hin.'),
+        ('Timestamp vor Jahr 2000',
+         'Auf modernen Linux-Systemen strukturell ausgeschlossen. '
+         'Entsteht durch touch -t 19990101 oder fehlerhafte Exploit-Tools.'),
+    ]
+
+    for col, lbl in enumerate(['Kombination', 'Bedeutung'], 1):
+        c = ws3.cell(10, col, lbl)
+        c.font      = _font(bold=True, color='FFFFFF', size=10)
+        c.fill      = F_HEADER
+        c.alignment = _align(h='center')
+        c.border    = _BDR
+    ws3.column_dimensions['A'].width = 30
+    ws3.column_dimensions['B'].width = 82
+    ws3.row_dimensions[10].height = 20
+
+    for i, (kombi, bedeutung) in enumerate(FORENSIC_HINTS, 11):
+        rbg = F_W_leg if i % 2 == 0 else F_ALT_leg
+        for col, val in enumerate([kombi, bedeutung], 1):
+            c        = ws3.cell(i, col, val)
+            c.fill   = rbg
+            c.font   = _font(size=9)
+            c.border = _BDR
+            c.alignment = _align(h='left', wrap=True)
+        ws3.row_dimensions[i].height = 32
+
+    # Abschnitt 3: Filterkriterien
+    ws3.merge_cells('A16:D16')
+    s3 = ws3.cell(16, 1, 'Warum sind genau diese Einträge in dieser Tabelle?')
+    s3.font      = _font(bold=True, color='FFFFFF', size=10)
+    s3.fill      = F_HEADER
+    s3.alignment = _align(h='left')
+    ws3.row_dimensions[16].height = 20
+
+    FILTER_INFO = [
+        ('Quelle der Timestamps',
+         'TSK fls -m liest die rohen Inode-Metadaten direkt aus dem Disk-Image. '
+         'mactime konvertiert das Body-File in eine lesbare Timeline. '
+         'Die Timestamps stammen also direkt aus dem Dateisystem — nicht aus Logs.'),
+        ('Immer enthalten',
+         'Einträge mit Severity HIGH oder CRITICAL sowie Dateipfade die bereits '
+         'in den forensic_findings auftauchen.'),
+        ('Relevante Pfade (Whitelist)',
+         '/home/  /root/  /tmp/  /var/tmp/  /dev/shm/  /etc/  '
+         '/usr/local/  /opt/  /srv/  /var/www/  /run/  /var/spool/'),
+        ('Herausgefiltert (Blacklist)',
+         '/usr/lib/  /usr/share/  /lib/  /lib64/  '
+         '/proc/  /sys/  /dev/  /run/lock/  /snap/  '
+         '— System-Libraries ohne forensische Relevanz'),
+    ]
+
+    for col, lbl in enumerate(['Kriterium', 'Erklärung'], 1):
+        c = ws3.cell(17, col, lbl)
+        c.font      = _font(bold=True, color='FFFFFF', size=10)
+        c.fill      = F_HEADER
+        c.alignment = _align(h='center')
+        c.border    = _BDR
+    ws3.row_dimensions[17].height = 20
+
+    for i, (kriterium, erklaerung) in enumerate(FILTER_INFO, 18):
+        rbg = F_W_leg if i % 2 == 0 else F_ALT_leg
+        for col, val in enumerate([kriterium, erklaerung], 1):
+            c        = ws3.cell(i, col, val)
+            c.fill   = rbg
+            c.font   = _font(size=9)
+            c.border = _BDR
+            c.alignment = _align(h='left', wrap=True)
+        ws3.row_dimensions[i].height = 36
 
     out = case_dir / 'filtered_filesystem_timeline.xlsx'
     wb.save(str(out))

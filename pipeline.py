@@ -20,7 +20,7 @@ from utils.reexport import (
 
 from stages import (
     stage01_detection,
-    stage02_memory,
+    # stage02_memory,
     stage02_partition_layout,
     stage03_profiling,
     stage035_basic_checks,
@@ -155,8 +155,8 @@ def main():
         ctx = run_stage(stage01_detection.run,          ctx, 'stage_01',     ui)
         ui.show_stage01_detail(ctx)
 
-        ctx = run_stage(stage02_memory.run,             ctx, 'stage_02_mem', ui)
-        ui.show_stage02_detail(ctx)
+        # ctx = run_stage(stage02_memory.run,             ctx, 'stage_02_mem', ui)
+        # ui.show_stage02_detail(ctx)
 
         ctx = run_stage(stage02_partition_layout.run,   ctx, 'stage_02',     ui)
         ui.show_stage02_partition_detail(ctx)
