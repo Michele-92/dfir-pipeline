@@ -1351,7 +1351,8 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
             c.fill = F_HEADER; c.alignment = _align(h='center'); c.border = _BDR
             ws_r.column_dimensions[get_column_letter(col)].width = w
         ws_r.row_dimensions[2].height = 20
-        ws_r.freeze_panes = 'A3'
+        ws_r.freeze_panes    = 'A3'
+        ws_r.auto_filter.ref = f'A2:{LC_D}{MAX_SHEET_ROWS + 3}'
 
         for ri, event in enumerate(evs, 3):
             sev   = (getattr(event, 'severity', 'info') or 'info').lower()
@@ -1379,6 +1380,121 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
                            f'Hinweis: {sess["total"] - len(evs):,} weitere Ereignisse '
                            f'nicht angezeigt (HIGH/CRITICAL priorisiert, Limit: {MAX_SHEET_ROWS})')
             nc.font = _font(size=9, color='5F5E5A'); nc.alignment = _align(h='center')
+
+    # ── Legende-Sheet ─────────────────────────────────────────────────────────
+    ws_leg = wb.create_sheet('Legende')
+    ws_leg.sheet_view.showGridLines = False
+    ws_leg.column_dimensions['A'].width = 28
+    ws_leg.column_dimensions['B'].width = 80
+
+    def _leg_banner(text, row):
+        ws_leg.merge_cells(f'A{row}:B{row}')
+        c = ws_leg.cell(row, 1, text)
+        c.font      = _font(bold=True, color='FFFFFF', size=12)
+        c.fill      = F_BANNER
+        c.alignment = _align(h='center')
+        ws_leg.row_dimensions[row].height = 24
+
+    def _leg_header(row):
+        for col, lbl in enumerate(['Bezeichnung', 'Erklärung'], 1):
+            c = ws_leg.cell(row, col, lbl)
+            c.font      = _font(bold=True, color='FFFFFF', size=10)
+            c.fill      = F_HEADER
+            c.alignment = _align(h='center')
+            c.border    = _BDR
+        ws_leg.row_dimensions[row].height = 20
+
+    def _leg_rows(data, start_row):
+        for i, (key, val) in enumerate(data, start_row):
+            rbg = F_W if i % 2 == 0 else F_ALT
+            for col, text in enumerate([key, val], 1):
+                c        = ws_leg.cell(i, col, text)
+                c.fill   = rbg
+                c.font   = _font(bold=(col == 1), size=9)
+                c.border = _BDR
+                c.alignment = _align(h='left', wrap=True)
+            ws_leg.row_dimensions[i].height = 32
+
+    # Abschnitt 1 — Aufbau der Excel
+    _leg_banner('Aufbau dieser Excel-Datei', 1)
+    _leg_header(2)
+    _leg_rows([
+        ('Mappe: Übersicht',
+         'Zeigt alle erkannten Boot/Shutdown-Zyklen als kompakte Tabelle. '
+         'Jede Zeile = ein Betriebszeitraum (Boot → Shutdown). '
+         'Ungeplante Neustarts (kein Shutdown vor nächstem Boot) sind orange markiert. '
+         'Kurze Laufzeiten unter 30 Minuten sind gelb markiert — forensisch verdächtig.'),
+        ('Mappe: Reboot_1, Reboot_2, ...',
+         'Pro erkanntem Betriebszeitraum eine eigene Mappe mit allen Ereignissen '
+         'die in diesem Zeitfenster aufgetreten sind. HIGH/CRITICAL-Ereignisse '
+         'werden immer angezeigt, restliche Ereignisse bis max. 500 Zeilen. '
+         'Spalten sind filterbar — Autofilter in Zeile 2.'),
+    ], 3)
+
+    # Abschnitt 2 — Woher kommen die Daten
+    _leg_banner('Woher kommen die Daten?', 6)
+    _leg_header(7)
+    _leg_rows([
+        ('Quelle allgemein',
+         'Alle Ereignisse stammen aus den Log-Parsern der Pipeline (Stage 06). '
+         'Die Logs wurden direkt aus dem Disk-Image extrahiert (TSK icat) '
+         'und durch 38 spezialisierte Parser verarbeitet.'),
+        ('Boot-Ereignisse',
+         'Erkannt über Event-Types: boot, system_boot, kernel_start '
+         'sowie Keywords: "system boot", "kernel command line", "linux version", '
+         '"reached target basic system" — typischerweise aus /var/log/syslog '
+         'oder /var/log/journal/.'),
+        ('Shutdown-Ereignisse',
+         'Erkannt über Event-Types: shutdown, system_shutdown '
+         'sowie Keywords: "shutting down", "halt", "poweroff", '
+         '"reached target shutdown" — typischerweise aus /var/log/syslog.'),
+        ('Spalte "Quelle"',
+         'Zeigt den vollständigen Dateipfad der Log-Datei auf dem Image '
+         'aus der das Ereignis stammt. Beispiele: /var/log/syslog, '
+         '/var/log/auth.log, /var/log/journal/ (systemd). '
+         'Dieser Pfad kann direkt im Image nachgeprüft werden.'),
+    ], 8)
+
+    # Abschnitt 3 — Spalten der Reboot-Sheets
+    _leg_banner('Spalten der Reboot_X-Mappen', 13)
+    _leg_header(14)
+    _leg_rows([
+        ('Timestamp_UTC',
+         'Zeitstempel des Ereignisses in UTC. Normalisiert durch die Pipeline '
+         '— Zeitzonenkorrektur wurde automatisch angewendet.'),
+        ('Severity',
+         'Schweregrad: CRITICAL (rot) → HIGH (orange) → MEDIUM (grau) → '
+         'LOW/INFO (grün). Wird vom jeweiligen Parser oder der '
+         'Timeline-Analyse vergeben.'),
+        ('Event_Type',
+         'Interner Ereignistyp des Parsers. Beispiele: boot, shutdown, '
+         'kernel_start, system_boot — ermöglicht gezielte Filterung.'),
+        ('Benutzer',
+         'Benutzer der dem Ereignis zugeordnet ist, falls im Log vorhanden.'),
+        ('IP',
+         'IP-Adresse die dem Ereignis zugeordnet ist, falls im Log vorhanden.'),
+        ('Quelle',
+         'Vollständiger Dateipfad der Log-Quelldatei auf dem Image. '
+         'Direkt nachprüfbar — z.B. /var/log/syslog enthält '
+         'die Boot-Kernel-Meldungen.'),
+        ('Nachricht',
+         'Original-Log-Zeile (gekürzt auf 200 Zeichen). '
+         'Zeigt den genauen Wortlaut wie er in der Log-Datei steht.'),
+    ], 15)
+
+    # Abschnitt 4 — Farbkodierung
+    _leg_banner('Farbkodierung der Übersicht', 23)
+    _leg_header(24)
+    _leg_rows([
+        ('Rot/Rosa hinterlegt',
+         'Ungeplanter Neustart — kein sauberer Shutdown vor dem nächsten Boot. '
+         'Deutet auf Absturz, Stromausfall oder erzwungenen Neustart hin.'),
+        ('Gelb/Orange hinterlegt',
+         'Kurze Laufzeit unter 30 Minuten — forensisch auffällig. '
+         'Kann auf einen gezielten Neustart nach einer Manipulation hinweisen.'),
+        ('Weiß/Hellgrau',
+         'Normaler Betriebszeitraum ohne besondere Auffälligkeiten.'),
+    ], 25)
 
     out = case_dir / 'reboot_sessions.xlsx'
     wb.save(str(out))
