@@ -73,10 +73,12 @@ def test_to_utc_invalid():
 
 
 def test_create_case_dir():
+    # Erwartete Struktur entspricht stage01_detection._create_case_dir:
+    # es werden nur raw/disk_artefakte und raw/log_artefakte angelegt
+    # (memory_artefakte/autopsy_artefakte entfielen mit Deaktivierung
+    #  von Stage 02_mem und Stage 04.1).
     with tempfile.TemporaryDirectory() as tmp:
         case_dir = _create_case_dir(Path(tmp))
         assert case_dir.exists()
         assert (case_dir / 'raw' / 'disk_artefakte').exists()
-        assert (case_dir / 'raw' / 'memory_artefakte').exists()
         assert (case_dir / 'raw' / 'log_artefakte').exists()
-        assert (case_dir / 'raw' / 'autopsy_artefakte').exists()
