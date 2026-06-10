@@ -67,9 +67,9 @@ def test_to_utc_iso():
 
 
 def test_to_utc_invalid():
-    from datetime import datetime, timezone
-    result = to_utc('not-a-date')
-    assert result == datetime.min.replace(tzinfo=timezone.utc)
+    # Review-Fix T2: unparsebare Timestamps -> None (frueher datetime.min,
+    # wodurch 'Erste Aktivitaet' im Report auf Jahr 0001 fiel)
+    assert to_utc('not-a-date') is None
 
 
 def test_create_case_dir():

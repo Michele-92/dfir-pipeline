@@ -112,14 +112,16 @@ class EventStore:
         ).fetchall()
         return {r[0]: r[1] for r in rows}
 
-    # ── Normalisierung (Stage 06) ──────────────────────────────────────────────
+    # ── Feld-Bereinigung (Stage 08) ────────────────────────────────────────────
 
-    def normalize_timestamps(self, to_utc_fn):
-        """Normalisiert alle Timestamps per Python-UDF und bereinigt Pflichtfelder."""
-        self._conn.create_function('py_to_utc', to_utc_fn)
+    def cleanup_required_fields(self):
+        """Bereinigt Pflichtfelder. Timestamps werden NICHT mehr angefasst —
+        die Konversion nach UTC passiert genau EINMAL in den Parsern mit der
+        Image-Zeitzone (Review-Fix CRITICAL #6: das fruehere zweite
+        Lokalisieren verschob bereits korrekte UTC-Quellen wie mactime,
+        wtmp, journald und audit um den Zeitzonen-Offset)."""
         self._conn.execute("""
             UPDATE events SET
-                timestamp  = CAST(py_to_utc(CAST(timestamp AS VARCHAR)) AS TIMESTAMP),
                 source     = CASE WHEN source     = '' OR source     IS NULL
                                   THEN 'unknown' ELSE source     END,
                 event_type = CASE WHEN event_type = '' OR event_type IS NULL

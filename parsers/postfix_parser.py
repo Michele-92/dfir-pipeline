@@ -20,13 +20,15 @@ class PostfixMailParser(BaseParser):
         return path.name.startswith(('mail.log', 'maillog'))
 
     def parse(self, path: Path) -> List[ForensicEvent]:
+        from utils.timestamp import infer_syslog_year, year_reference
         events = []
-        year = datetime.now().year
+        ref = year_reference(path)
         for line in self.read_lines(path):
             m_base = SYSLOG_PATTERN.match(line)
             if not m_base:
                 continue
-            msg = m_base['msg']
+            msg  = m_base['msg']
+            year = infer_syslog_year(ref, m_base['month'], int(m_base['day']))
             ts  = f'{year} {m_base["month"]} {m_base["day"]} {m_base["time"]}'
             mf  = MAIL_FROM.search(msg)
             mt  = MAIL_TO.search(msg)

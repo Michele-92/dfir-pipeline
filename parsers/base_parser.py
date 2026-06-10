@@ -14,6 +14,11 @@ class BaseParser(ABC):
     name:          str       = ''
     file_patterns: List[str] = []
     binary:        bool      = False
+    # Systemzeitzone des analysierten Images (Stage 03) — wird von
+    # route_and_parse vor dem Parsen gesetzt. Naive Log-Zeiten werden als
+    # DIESE Zone interpretiert (Review-Fix CRITICAL #6: vorher doppelte
+    # Konversion — Parser nahmen UTC an, Stage 08 verschob nochmal).
+    system_tz:     str       = 'UTC'
 
     @abstractmethod
     def can_parse(self, file_path: Path) -> bool:
@@ -34,10 +39,14 @@ class BaseParser(ABC):
                    user=None, ip=None, process=None,
                    file_path=None, severity='info', **_) -> ForensicEvent:
         from utils.timestamp import to_utc
+        ts = to_utc(timestamp, self.system_tz)
+        if ts is None:
+            # unparsebarer Timestamp: Event behalten (kein Beweisverlust),
+            # aber klar kennzeichnen und auf Epoch setzen (filterbar)
+            ts = datetime(1970, 1, 1, tzinfo=timezone.utc)
+            event_type = f'{event_type}_ts_invalid'
         return ForensicEvent(
-            # to_utc verarbeitet auch datetime-Objekte: aware -> nach UTC
-            # konvertiert, naiv -> als system_tz interpretiert
-            timestamp   = to_utc(timestamp),
+            timestamp   = ts,
             source      = source,
             event_type  = event_type,
             message     = message,

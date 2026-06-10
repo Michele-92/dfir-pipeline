@@ -12,16 +12,14 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
     tz = ctx.timezone
 
-    def _to_utc_str(ts_str: str) -> str:
-        try:
-            return to_utc(ts_str, tz).isoformat()
-        except Exception:
-            return ts_str
-
+    # Review-Fix CRITICAL #6: Timestamps sind bereits in den Parsern korrekt
+    # nach UTC normalisiert (mit der Image-Zeitzone aus Stage 03). Die
+    # fruehere zweite Konversion hier verschob UTC-Quellen (mactime, wtmp,
+    # journald, audit, hayabusa) faelschlich um den Zeitzonen-Offset.
     with EventStore(ctx.events_db_path) as store:
         total = store.count()
-        log.info(f'  Normalisiere {total:,} Events per SQL-UPDATE...')
-        store.normalize_timestamps(_to_utc_str)
+        log.info(f'  Bereinige Pflichtfelder ({total:,} Events)...')
+        store.cleanup_required_fields()
         log.info(f'  Lade {total:,} Events in Speicher...')
         ctx.normalized_events = store.get_all_sorted()
 
@@ -41,8 +39,10 @@ def run(ctx: PipelineContext) -> PipelineContext:
     except Exception:
         ctx.timezone_offset = 'UTC'
 
-    # Frühestes und letztes Event mit Lokalzeit
-    if ctx.normalized_events:
+    # Fruehestes/letztes Event — Epoch-Marker (ts_invalid) und
+    # Vor-1990-Artefakte nicht als 'Erste Aktivitaet' ausweisen
+    _valid = [e for e in ctx.normalized_events if e.timestamp.year >= 1990]
+    if _valid:
         def _fmt(event) -> str:
             utc_str   = event.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')
             try:
@@ -52,8 +52,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
             except Exception:
                 return utc_str
 
-        ctx.earliest_event = _fmt(ctx.normalized_events[0])
-        ctx.latest_event   = _fmt(ctx.normalized_events[-1])
+        ctx.earliest_event = _fmt(_valid[0])
+        ctx.latest_event   = _fmt(_valid[-1])
 
     log.info(f'  {count:,} Events normalisiert und sortiert')
     log.info(f'  Systemzeitzone: {tz} ({ctx.timezone_offset})')

@@ -19,13 +19,14 @@ class UFWParser(BaseParser):
         return 'ufw' in path.name.lower()
 
     def parse(self, path: Path) -> List[ForensicEvent]:
+        from utils.timestamp import infer_syslog_year, year_reference
         events = []
-        from datetime import datetime
-        year = datetime.now().year
+        ref = year_reference(path)
         for line in self.read_lines(path):
             m_base = SYSLOG_PATTERN.match(line)
             if not m_base:
                 continue
+            year = infer_syslog_year(ref, m_base['month'], int(m_base['day']))
             msg = m_base['msg']
             mu  = UFW_RE.search(msg)
             if not mu:

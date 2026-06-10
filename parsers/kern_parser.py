@@ -22,12 +22,14 @@ class KernLogParser(BaseParser):
         return path.name.startswith(('kern.log', 'dmesg'))
 
     def parse(self, path: Path) -> List[ForensicEvent]:
+        from utils.timestamp import infer_syslog_year, year_reference
         events = []
-        year = datetime.now().year
+        ref = year_reference(path)
         for line in self.read_lines(path):
             m = KERN_PATTERN.match(line)
             if not m:
                 continue
+            year = infer_syslog_year(ref, m['month'], int(m['day']))
             msg = m['msg']
             sev = 'high' if any(k in msg.lower() for k in KERN_CRITICAL) else 'info'
             events.append(self.make_event(

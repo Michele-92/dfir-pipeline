@@ -20,12 +20,14 @@ class YumParser(BaseParser):
         return path.name.startswith('yum.log')
 
     def parse(self, path: Path) -> List[ForensicEvent]:
+        from utils.timestamp import infer_syslog_year, year_reference
         events = []
-        year = datetime.now().year
+        ref = year_reference(path)
         for line in self.read_lines(path):
             m = YUM_PATTERN.match(line)
             if not m:
                 continue
+            year = infer_syslog_year(ref, m['month'], int(m['day']))
             events.append(self.make_event(
                 f'{year} {m["month"]} {m["day"]} {m["time"]}',
                 'yum', f'pkg_{m["action"].lower()}',

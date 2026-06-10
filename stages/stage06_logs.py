@@ -127,8 +127,10 @@ def run(ctx: PipelineContext) -> PipelineContext:
                             'extraction': method}
             return {'orig_path': '', 'partition': '', 'extraction': 'logs_dir'}
 
+        system_tz = ctx.timezone or 'UTC'
         with ProcessPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(route_and_parse, lf, _prov_for(lf)): lf
+            futures = {executor.submit(route_and_parse, lf, _prov_for(lf),
+                                       system_tz): lf
                        for lf in log_files}
             progress = tqdm(
                 as_completed(futures),
@@ -204,7 +206,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
     return ctx
 
 
-def route_and_parse(log_file: Path, prov: dict = None):
+def route_and_parse(log_file: Path, prov: dict = None,
+                    system_tz: str = 'UTC'):
     """Routet eine Datei zum passenden Parser und stempelt Provenienz.
 
     can_parse() prueft den ORIGINALPFAD auf dem Image (aus dem Manifest) —
@@ -229,6 +232,7 @@ def route_and_parse(log_file: Path, prov: dict = None):
         chosen = PlasaFallbackParser()
     log.debug(f'Parser {chosen.name} → {route_path.name}')
 
+    chosen.system_tz = system_tz   # naive Log-Zeiten = Image-Zeitzone
     events = chosen.safe_parse(log_file)
     for e in events:
         e.parser_name = chosen.name

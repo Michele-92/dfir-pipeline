@@ -20,22 +20,28 @@ class ZshHistoryParser(BaseParser):
 
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
+        try:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        except OSError:
+            mtime = datetime.now(tz=timezone.utc)
         for line in self.read_lines(path):
             m = ZSH_EXTENDED.match(line)
+            estimated = False
             if m:
                 try:
                     ts = datetime.fromtimestamp(int(m.group(1)), tz=timezone.utc)
                 except (ValueError, OSError):
-                    ts = datetime.now(tz=timezone.utc)
+                    ts, estimated = mtime, True
                 cmd = m.group(2).strip()
             else:
-                ts  = datetime.now(tz=timezone.utc)
+                ts, estimated = mtime, True
                 cmd = line.strip()
             if not cmd:
                 continue
             sev = 'high' if any(s in cmd.lower() for s in SUSPICIOUS) else 'info'
+            etype = 'shell_command_ts_estimated' if estimated else 'shell_command'
             events.append(self.make_event(
-                ts, 'zsh_history', 'shell_command', cmd,
+                ts, 'zsh_history', etype, cmd,
                 process='zsh', severity=sev
             ))
         return events

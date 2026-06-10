@@ -21,13 +21,15 @@ class SyslogParser(BaseParser):
         return path.name.startswith(('syslog', 'messages'))
 
     def parse(self, path: Path) -> List[ForensicEvent]:
+        from utils.timestamp import infer_syslog_year, year_reference
         events = []
         lines = self._read(path)
-        year = datetime.now().year
+        ref = year_reference(path)   # Review-Fix #7: nicht datetime.now().year
         for line in lines:
             m = PATTERN.match(line)
             if not m:
                 continue
+            year = infer_syslog_year(ref, m['month'], int(m['day']))
             raw_ts = f'{year} {m["month"]} {m["day"]} {m["time"]}'
             events.append(self.make_event(
                 timestamp  = raw_ts,

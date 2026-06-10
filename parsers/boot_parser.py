@@ -18,7 +18,13 @@ class BootLogParser(BaseParser):
 
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
-        boot_time = datetime.now(tz=timezone.utc)
+        # boot.log traegt keine Timestamps — Datei-mtime statt Analysezeit
+        # (Review-Fix: vorher bekam jeder Boot-Eintrag 'jetzt' als Zeit),
+        # Suffix _ts_estimated macht die Schaetzung filterbar
+        try:
+            boot_time = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        except OSError:
+            boot_time = datetime.now(tz=timezone.utc)
         for line in self.read_lines(path):
             m = BOOT_PATTERN.search(line)
             if not m:
@@ -26,7 +32,7 @@ class BootLogParser(BaseParser):
             status = m['status']
             sev = 'high' if status == 'FAILED' else 'medium' if status == 'WARNING' else 'info'
             events.append(self.make_event(
-                boot_time, 'boot', f'boot_{status.lower()}',
+                boot_time, 'boot', f'boot_{status.lower()}_ts_estimated',
                 f'Boot: [{status}] {m["msg"]}', severity=sev
             ))
         return events

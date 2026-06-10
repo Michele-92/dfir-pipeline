@@ -21,7 +21,13 @@ class BashHistoryParser(BaseParser):
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
         lines  = self.read_lines(path)
-        ts     = datetime.now(tz=timezone.utc)
+        # Ohne HISTTIMEFORMAT gibt es keine Zeiten — Datei-mtime als
+        # Schaetzung (statt Analysezeit) + _ts_estimated-Kennzeichnung
+        try:
+            ts = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        except OSError:
+            ts = datetime.now(tz=timezone.utc)
+        estimated = True
         i = 0
         while i < len(lines):
             line = lines[i].strip()
@@ -32,6 +38,7 @@ class BashHistoryParser(BaseParser):
             if m:
                 try:
                     ts = datetime.fromtimestamp(int(m.group(1)), tz=timezone.utc)
+                    estimated = False
                 except (ValueError, OSError):
                     pass
                 i += 1
@@ -46,8 +53,9 @@ class BashHistoryParser(BaseParser):
             if not cmd:
                 continue
             sev = 'high' if any(s in cmd.lower() for s in SUSPICIOUS) else 'info'
+            etype = 'shell_command_ts_estimated' if estimated else 'shell_command'
             events.append(self.make_event(
-                ts, 'bash_history', 'shell_command', cmd,
+                ts, 'bash_history', etype, cmd,
                 process='bash', severity=sev
             ))
         return events
