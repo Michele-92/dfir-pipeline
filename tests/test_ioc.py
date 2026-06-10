@@ -1,4 +1,5 @@
 import sys
+import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 import pytest
@@ -7,12 +8,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from models.event import ForensicEvent
 from models.pipeline_context import PipelineContext
+from utils.event_store import EventStore
 from stages.stage07_ioc import run, _collect_texts
 
 
 def _ctx_with_events(messages):
+    # Stage 07 liest Events seit der DuckDB-Migration aus events.db
+    # (ctx.events wird in Stage 06 geleert) — Tests muessen daher wie die
+    # echte Pipeline in eine events.db schreiben.
     ctx = PipelineContext()
-    ctx.events = [
+    events = [
         ForensicEvent(
             timestamp  = datetime.now(tz=timezone.utc),
             source     = 'test',
@@ -21,6 +26,10 @@ def _ctx_with_events(messages):
         )
         for msg in messages
     ]
+    db_path = Path(tempfile.mkdtemp()) / 'events.db'
+    with EventStore(db_path) as store:
+        store.insert_events(events)
+    ctx.events_db_path = db_path
     return ctx
 
 
