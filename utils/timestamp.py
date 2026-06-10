@@ -24,10 +24,25 @@ def to_utc(raw_timestamp, system_tz: str = 'UTC') -> Optional[datetime]:
             except Exception:
                 return raw_timestamp.replace(tzinfo=timezone.utc)
         return raw_timestamp.astimezone(timezone.utc)
+    s = ' '.join(str(raw_timestamp).split())
+    # Fast-Paths fuer die haeufigsten Formate — dateutil kostet ~10x mehr
+    # und dominiert bei Millionen Syslog-Zeilen die Stage-6-Laufzeit
+    dt = None
     try:
-        dt = dateparser.parse(str(raw_timestamp))
+        dt = datetime.fromisoformat(s)            # ISO (dpkg, dnf, ...)
+    except ValueError:
+        try:
+            dt = datetime.strptime(s, '%Y %b %d %H:%M:%S')   # Syslog-Familie
+        except ValueError:
+            pass
+    if dt is None:
+        try:
+            dt = dateparser.parse(s)
+        except Exception:
+            return None
         if dt is None:
             return None
+    try:
         if dt.tzinfo is None:
             tz = pytz.timezone(system_tz)
             dt = tz.localize(dt)

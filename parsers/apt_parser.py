@@ -15,9 +15,9 @@ class AptHistoryParser(BaseParser):
 
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
-        try:
-            content = path.read_text(errors='replace')
-        except PermissionError:
+        # gedeckelt + gzip-faehig ueber die Basisklasse
+        content = '\n'.join(self.read_lines(path))
+        if not content:
             return []
         for block in content.split('\n\n'):
             ts_m  = re.search(r'Start-Date:\s*(.+)', block)

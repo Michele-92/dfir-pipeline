@@ -1,4 +1,3 @@
-import gzip
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,7 +22,10 @@ class SyslogParser(BaseParser):
     def parse(self, path: Path) -> List[ForensicEvent]:
         from utils.timestamp import infer_syslog_year, year_reference
         events = []
-        lines = self._read(path)
+        # read_lines der Basisklasse: gzip transparent UND speichergedeckelt.
+        # Die fruehere eigene _read() entpackte rotierte .gz KOMPLETT in den
+        # RAM (33 MB syslog.6.gz -> >500 MB Text) — DAS war der Pool-Killer.
+        lines = self.read_lines(path)
         ref = year_reference(path)   # Review-Fix #7: nicht datetime.now().year
         for line in lines:
             m = PATTERN.match(line)
@@ -41,12 +43,6 @@ class SyslogParser(BaseParser):
                 raw        = m.groupdict(),
             ))
         return events
-
-    def _read(self, path: Path) -> List[str]:
-        if path.suffix == '.gz':
-            with gzip.open(path, 'rt', errors='replace') as f:
-                return f.read().splitlines()
-        return self.read_lines(path)
 
     def _detect_severity(self, msg: str) -> str:
         lower = msg.lower()
