@@ -89,18 +89,21 @@ def run(ctx: PipelineContext) -> PipelineContext:
                     continue
                 # Review-Fix #18: Private/reservierte IPs nicht verwerfen,
                 # aber als eigener Typ fuehren — verrauschen sonst die
-                # oeffentlichen IOCs (Lateral Movement bleibt sichtbar)
-                if ioc_type == 'ip' and PRIVATE_IPS.match(value):
-                    ioc_type = 'ip_private'
+                # oeffentlichen IOCs (Lateral Movement bleibt sichtbar).
+                # WICHTIG: eigene Variable — ioc_type ist die Schleifen-
+                # variable und darf nicht pro Treffer mutiert werden!
+                real_type = ioc_type
+                if real_type == 'ip' and PRIVATE_IPS.match(value):
+                    real_type = 'ip_private'
                 # Pseudo-Domains (Dateinamen, Pfad-Bestandteile) verwerfen
-                if ioc_type == 'domain' and _is_pseudo_domain(value, text, match.start()):
+                if real_type == 'domain' and _is_pseudo_domain(value, text, match.start()):
                     continue
-                key = (ioc_type, value)
+                key = (real_type, value)
                 if key in seen:
                     continue
                 seen.add(key)
                 iocs.append(IOC(
-                    type      = ioc_type,
+                    type      = real_type,
                     value     = value,
                     source    = source,
                     context   = text[max(0, match.start()-40):match.end()+40].strip(),
