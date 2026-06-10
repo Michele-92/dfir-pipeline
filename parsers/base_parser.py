@@ -35,7 +35,9 @@ class BaseParser(ABC):
                    file_path=None, severity='info', **_) -> ForensicEvent:
         from utils.timestamp import to_utc
         return ForensicEvent(
-            timestamp   = to_utc(str(timestamp)) if not isinstance(timestamp, datetime) else timestamp,
+            # to_utc verarbeitet auch datetime-Objekte: aware -> nach UTC
+            # konvertiert, naiv -> als system_tz interpretiert
+            timestamp   = to_utc(timestamp),
             source      = source,
             event_type  = event_type,
             message     = message,
@@ -47,6 +49,14 @@ class BaseParser(ABC):
         )
 
     def read_lines(self, path: Path) -> List[str]:
+        # gzip transparent lesen — rotierte Logs (.gz) fuer ALLE Parser
+        if path.suffix == '.gz':
+            import gzip
+            try:
+                with gzip.open(path, 'rt', errors='replace') as f:
+                    return f.read().splitlines()
+            except (OSError, EOFError):
+                return []
         for enc in ['utf-8', 'latin-1', 'cp1252']:
             try:
                 return path.read_text(encoding=enc).splitlines()

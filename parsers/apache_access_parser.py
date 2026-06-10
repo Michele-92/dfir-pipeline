@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -40,8 +41,14 @@ class ApacheAccessParser(BaseParser):
                 sev = 'high'
             else:
                 sev = 'info'
+            # CLF-Format '10/Oct/2000:13:55:36 -0700' ist fuer dateutil
+            # unparsebar (verifiziert) -> explizites strptime
+            try:
+                ts = datetime.strptime(m['ts'], '%d/%b/%Y:%H:%M:%S %z')
+            except ValueError:
+                ts = m['ts']
             events.append(self.make_event(
-                m['ts'], 'apache_access', 'http_request',
+                ts, 'apache_access', 'http_request',
                 f'{m["method"]} {path_req} → {status}',
                 ip=m['ip'], severity=sev,
                 raw={'method': m['method'], 'path': path_req, 'status': status}

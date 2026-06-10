@@ -3062,9 +3062,9 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
         'apache_access','apache_error','nginx_access','nginx_error',
         'mysql','postgresql','mongodb',
         'audit','fail2ban','ufw','cron',
-        'bash_history','zsh_history','fish_history','utmp',
-        'ssh','postfix','ftp','samba','openvpn',
-        'docker','containerd','iis','evtx','plaso_fallback',
+        'bash_history','zsh_history','fish_history','utmp','wtmpdb',
+        'postfix','ftp','samba','openvpn',
+        'docker','containerd','iis','text_fallback',
         'hayabusa',
     ]
     rows = [['Parser', 'Log-Datei / Quelle', 'Events', 'Status']]
@@ -3073,7 +3073,7 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
         if name == 'hayabusa':
             source = 'EVTX (Sigma-Rules)'
             status = f'Aktiv — {count} Sigma-Treffer' if count > 0 else 'Übersprungen — keine EVTX-Dateien'
-        elif name == 'plaso_fallback' and count > 0:
+        elif name == 'text_fallback' and count > 0:
             source = f'{name}.log'
             status = 'Fallback aktiv'
         else:

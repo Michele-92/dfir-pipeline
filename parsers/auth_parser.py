@@ -13,6 +13,8 @@ SSH_INVALID = re.compile(r'Invalid user (\S+) from ([\d.]+)')
 SUDO_CMD    = re.compile(r'(\S+)\s*:\s*TTY=\S+\s*;\s*PWD=\S+\s*;\s*USER=(\S+)\s*;\s*COMMAND=(.+)')
 NEW_USER    = re.compile(r'new user: name=(\S+)')
 USER_DEL    = re.compile(r'delete user (.+)')
+# uebernommen aus SSHParser (entfernt — kam durch Routing-Reihenfolge nie zum Zug)
+SSH_MISC    = re.compile(r'Received disconnect|X11 forwarding')
 
 
 class AuthLogParser(BaseParser):
@@ -72,4 +74,9 @@ class AuthLogParser(BaseParser):
                 events.append(self.make_event(ts, 'auth', 'user_deleted',
                     f'Benutzer gelöscht: {m[1]}',
                     user=m[1].strip(), severity='high'))
+                continue
+
+            if 'sshd' in line and SSH_MISC.search(msg):
+                events.append(self.make_event(ts, 'auth', 'ssh_misc',
+                    msg, severity='info'))
         return events

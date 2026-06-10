@@ -5,6 +5,7 @@ from .kern_parser        import KernLogParser
 from .boot_parser        import BootLogParser
 from .daemon_parser      import DaemonLogParser
 from .wtmp_parser        import WtmpParser
+from .wtmpdb_parser      import WtmpdbParser
 from .lastlog_parser     import LastlogParser
 
 from .dpkg_parser        import DpkgParser
@@ -47,7 +48,7 @@ from .mactime_parser     import MACTimeParser
 
 __all__ = [
     'SyslogParser', 'AuthLogParser', 'JournaldParser', 'KernLogParser',
-    'BootLogParser', 'DaemonLogParser', 'WtmpParser', 'LastlogParser',
+    'BootLogParser', 'DaemonLogParser', 'WtmpParser', 'WtmpdbParser', 'LastlogParser',
     'DpkgParser', 'AptHistoryParser', 'YumParser', 'DnfParser', 'PacmanParser',
     'ApacheAccessParser', 'ApacheErrorParser', 'NginxAccessParser', 'NginxErrorParser',
     'MySQLErrorParser', 'PostgreSQLParser', 'MongoDBParser',

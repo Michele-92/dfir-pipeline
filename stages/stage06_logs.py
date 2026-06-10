@@ -14,8 +14,8 @@ from models.event import ForensicEvent
 from utils.event_store import EventStore
 from stages.stage05_tsk import LOG_PATH_PREFIXES, LOG_NAME_KEYWORDS
 from parsers import (
-    JournaldParser, WtmpParser, UtmpParser, LastlogParser, EVTXParser,
-    AuthLogParser, SSHParser, CronParser, AuditParser, Fail2BanParser,
+    JournaldParser, WtmpParser, WtmpdbParser, UtmpParser, LastlogParser,
+    AuthLogParser, CronParser, AuditParser, Fail2BanParser,
     UFWParser, KernLogParser, BootLogParser, DaemonLogParser, SyslogParser,
     DpkgParser, AptHistoryParser, YumParser, DnfParser, PacmanParser,
     ApacheAccessParser, ApacheErrorParser, NginxAccessParser, NginxErrorParser,
@@ -27,14 +27,18 @@ from parsers import (
 
 log = logging.getLogger(__name__)
 
+# Reihenfolge = Routing-Prioritaet (first match wins).
+# WtmpdbParser VOR WtmpParser (wtmp.db beginnt mit 'wtmp').
+# Entfernt (Review-Fix #21): SSHParser (Duplikat von AuthLogParser, kam nie
+# zum Zug), EVTXParser (EVTX laeuft zentral ueber Hayabusa in Stage 4.3 —
+# vorher wurden dieselben Dateien doppelt verarbeitet).
 ALL_PARSERS = [
     JournaldParser(),
+    WtmpdbParser(),
     WtmpParser(),
     UtmpParser(),
     LastlogParser(),
-    EVTXParser(),
     AuthLogParser(),
-    SSHParser(),
     CronParser(),
     AuditParser(),
     Fail2BanParser(),
@@ -89,8 +93,31 @@ def run(ctx: PipelineContext) -> PipelineContext:
     batch: List[ForensicEvent] = []
 
     with EventStore(db_path) as store:
+        manifest = ctx.extraction_manifest or {}
+
+        def _orig_for(lf: Path) -> str:
+            """Originalpfad auf dem Image fuer eine extrahierte Datei."""
+            entry = manifest.get(str(lf))
+            if entry and entry.get('orig_path'):
+                return entry['orig_path']
+            if ctx.case_dir:
+                # log_artefakte/p<offset>/<pfad>  bzw.
+                # disk_artefakte/partition_<offset>/<pfad> (tsk_recover)
+                for sub in ('raw/log_artefakte', 'raw/disk_artefakte'):
+                    base = ctx.case_dir / sub
+                    try:
+                        rel = lf.relative_to(base).as_posix()
+                    except ValueError:
+                        continue
+                    first, _, rest = rel.partition('/')
+                    if rest and (first.startswith('p') or first.startswith('partition_')):
+                        return '/' + rest
+                    return '/' + rel
+            return ''
+
         with ProcessPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(route_and_parse, lf): lf for lf in log_files}
+            futures = {executor.submit(route_and_parse, lf, _orig_for(lf)): lf
+                       for lf in log_files}
             progress = tqdm(
                 as_completed(futures),
                 total=len(log_files),
@@ -164,14 +191,21 @@ def run(ctx: PipelineContext) -> PipelineContext:
     return ctx
 
 
-def route_and_parse(log_file: Path) -> List[ForensicEvent]:
+def route_and_parse(log_file: Path, orig_path: str = '') -> List[ForensicEvent]:
+    """Routet eine Datei zum passenden Parser.
+
+    can_parse() prueft den ORIGINALPFAD auf dem Image (aus dem Manifest) —
+    pfadbasierte Checks wie 'apache' in str(path) funktionieren damit wieder.
+    Geparst wird die extrahierte Datei.
+    """
+    route_path = Path(orig_path) if orig_path else log_file
     for parser in ALL_PARSERS:
-        if parser.name == 'plaso_fallback':
+        if parser.name == 'text_fallback':
             continue
-        if parser.can_parse(log_file):
-            log.debug(f'Parser {parser.name} → {log_file.name}')
+        if parser.can_parse(route_path):
+            log.debug(f'Parser {parser.name} → {route_path.name}')
             return parser.safe_parse(log_file)
-    log.debug(f'Plaso Fallback → {log_file.name}')
+    log.debug(f'Text-Fallback → {route_path.name}')
     return PlasaFallbackParser().safe_parse(log_file)
 
 

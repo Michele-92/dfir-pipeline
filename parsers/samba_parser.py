@@ -18,9 +18,12 @@ class SambaParser(BaseParser):
 
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
+        last_ts = ''   # Samba schreibt '[Timestamp]' und Message auf getrennte Zeilen
         for line in self.read_lines(path):
             mt = SAMBA_TS.search(line)
-            ts = mt.group(1) if mt else ''
+            if mt:
+                last_ts = mt.group(1)
+            ts = mt.group(1) if mt else last_ts
             mi = SAMBA_IP.search(line)
             ip = mi.group(1) if mi else None
             sev = 'high' if any(w in line.lower() for w in ['failed', 'error', 'denied']) else 'info'
