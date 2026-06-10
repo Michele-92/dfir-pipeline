@@ -57,18 +57,28 @@ class BaseParser(ABC):
             severity    = severity,
         )
 
+    # Max. Bytes pro Textdatei — OOM-Schutz: grosse Binaerdateien
+    # (Journal, Datenbanken) rissen sonst den Worker-Prozess und damit
+    # den gesamten ProcessPool (105 'fehler'-Dateien im Praxistest).
+    MAX_READ_BYTES = 100 * 1024 * 1024   # 100 MB
+
     def read_lines(self, path: Path) -> List[str]:
         # gzip transparent lesen — rotierte Logs (.gz) fuer ALLE Parser
         if path.suffix == '.gz':
             import gzip
             try:
-                with gzip.open(path, 'rt', errors='replace') as f:
-                    return f.read().splitlines()
+                with gzip.open(path, 'rb') as f:
+                    data = f.read(self.MAX_READ_BYTES)
             except (OSError, EOFError):
                 return []
-        for enc in ['utf-8', 'latin-1', 'cp1252']:
-            try:
-                return path.read_text(encoding=enc).splitlines()
-            except (UnicodeDecodeError, PermissionError):
-                continue
-        return []
+            return data.decode('utf-8', errors='replace').splitlines()
+        try:
+            size = path.stat().st_size
+            with path.open('rb') as f:
+                data = f.read(min(size, self.MAX_READ_BYTES))
+            if size > self.MAX_READ_BYTES:
+                log.warning(f'{path.name}: {size/1e6:.0f} MB — nur erste '
+                            f'{self.MAX_READ_BYTES/1e6:.0f} MB gelesen (OOM-Schutz)')
+        except (OSError, PermissionError):
+            return []
+        return data.decode('utf-8', errors='replace').splitlines()

@@ -35,6 +35,16 @@ LOG_NAME_KEYWORDS = [
     'bash_history', 'zsh_history', 'fish_history',
 ]
 
+# Geloeschte Dateien landen bei fls oft unter $OrphanFiles/ OHNE Pfad —
+# dort matchen wir per Namens-Hinweis (alte Pipeline fand geloeschte Logs
+# ueber Basename-Keywords; das bleibt so erhalten)
+ORPHAN_NAME_HINTS = [
+    'auth.log', 'syslog', 'messages', 'secure', 'kern.log', 'dmesg',
+    'wtmp', 'btmp', 'lastlog', 'utmp', 'audit', 'dpkg.log', 'history.log',
+    'access.log', 'error.log', 'mail.log', 'maillog', 'cron', 'boot.log',
+    'daemon.log', 'ufw.log', 'fail2ban', '.journal', '.log',
+]
+
 
 def _analyse_xfs_native(image_path: Path, offset: int) -> List[str]:
     """XFS-Analyse via xfs_db wenn installiert, sonst TSK-Fallback."""
@@ -304,8 +314,13 @@ def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str],
         # Pfad normalisieren: fuehrendes './' weg, lowercase nur fuers Matching
         rel = fpath.removeprefix('./').lstrip('/')
         rel_norm = rel.lower()
-        if not (any(rel_norm.startswith(pre) for pre in LOG_PATH_PREFIXES)
-                or any(kw in Path(rel_norm).name for kw in LOG_NAME_KEYWORDS)):
+        base_name = Path(rel_norm).name
+        if rel_norm.startswith(('$orphanfiles/', 'orphanfiles/')):
+            # geloeschte Datei ohne Originalpfad -> Namens-Heuristik
+            if not any(h in base_name for h in ORPHAN_NAME_HINTS):
+                continue
+        elif not (any(rel_norm.startswith(pre) for pre in LOG_PATH_PREFIXES)
+                  or any(kw in base_name for kw in LOG_NAME_KEYWORDS)):
             continue
         tokens = meta.split()
         if len(tokens) < 2:

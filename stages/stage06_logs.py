@@ -4,6 +4,7 @@ import logging
 import subprocess
 import yaml
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
@@ -128,6 +129,27 @@ def run(ctx: PipelineContext) -> PipelineContext:
             return {'orig_path': '', 'partition': '', 'extraction': 'logs_dir'}
 
         system_tz = ctx.timezone or 'UTC'
+
+        def _handle_result(lf, parser_name, events):
+            """Verbucht das Ergebnis einer Datei (Pool- UND Sequenz-Pfad)."""
+            nonlocal parsed_count
+            # parser_file_map erfasst JEDE geroutete Datei — auch mit
+            # 0 Events (Review-Fix: Dateien ohne Treffer waren unsichtbar)
+            file_label = _prov_for(lf).get('orig_path') or str(lf)
+            if parser_name not in parser_file_map:
+                parser_file_map[parser_name] = {'count': 0, 'files': []}
+            parser_file_map[parser_name]['count'] += len(events)
+            parser_file_map[parser_name]['files'].append(file_label)
+            if events:
+                batch.extend(events)
+                parsed_count += len(events)
+                for e in events:
+                    parser_stats[e.source] = parser_stats.get(e.source, 0) + 1
+                if len(batch) >= _BATCH_SIZE:
+                    store.insert_events(batch)
+                    batch.clear()
+
+        retry_seq: List[Path] = []
         with ProcessPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(route_and_parse, lf, _prov_for(lf),
                                        system_tz): lf
@@ -139,33 +161,48 @@ def run(ctx: PipelineContext) -> PipelineContext:
                 desc='  Stage 6',
                 dynamic_ncols=True,
             )
+            pool_broken = False
             for future in progress:
                 lf = futures[future]
                 try:
                     parser_name, events = future.result()
+                except BrokenProcessPool:
+                    # Ein Worker ist hart gestorben (z.B. OOM-Killer) —
+                    # damit ist der GANZE Pool tot und alle restlichen
+                    # Futures schlagen fehl. Diese Dateien werden danach
+                    # sequenziell im Hauptprozess nachverarbeitet.
+                    if not pool_broken:
+                        log.error('Worker-Pool abgestuerzt (vermutlich RAM/OOM) '
+                                  '— restliche Dateien werden sequenziell verarbeitet')
+                        pool_broken = True
+                    retry_seq.append(lf)
+                    continue
                 except Exception as e:
                     log.warning(f'Parser fehlgeschlagen für {lf.name}: {e}')
                     parser_name, events = 'fehler', []
-                # parser_file_map erfasst JEDE geroutete Datei — auch mit
-                # 0 Events (Review-Fix: Dateien ohne Treffer waren unsichtbar)
-                file_label = _prov_for(lf).get('orig_path') or str(lf)
-                if parser_name not in parser_file_map:
-                    parser_file_map[parser_name] = {'count': 0, 'files': []}
-                parser_file_map[parser_name]['count'] += len(events)
-                parser_file_map[parser_name]['files'].append(file_label)
-                if events:
-                    batch.extend(events)
-                    parsed_count += len(events)
-                    for e in events:
-                        parser_stats[e.source] = parser_stats.get(e.source, 0) + 1
-                    if len(batch) >= _BATCH_SIZE:
-                        store.insert_events(batch)
-                        batch.clear()
+                _handle_result(lf, parser_name, events)
                 try:
                     total_lines += sum(1 for _ in lf.open('rb'))
                 except Exception:
                     pass
                 progress.set_postfix({'Events': f'{parsed_count:,}'})
+
+        # ── Sequenzieller Rettungspfad nach Pool-Absturz ──────────────────
+        if retry_seq:
+            log.info(f'  Sequenzielle Nachverarbeitung: {len(retry_seq)} Dateien')
+            for lf in tqdm(retry_seq, desc='  Stage 6 (sequenziell)',
+                           unit='Datei', dynamic_ncols=True):
+                try:
+                    parser_name, events = route_and_parse(
+                        lf, _prov_for(lf), system_tz)
+                except Exception as e:
+                    log.warning(f'Parser fehlgeschlagen für {lf.name}: {e}')
+                    parser_name, events = 'fehler', []
+                _handle_result(lf, parser_name, events)
+                try:
+                    total_lines += sum(1 for _ in lf.open('rb'))
+                except Exception:
+                    pass
         if batch:
             store.insert_events(batch)
 
