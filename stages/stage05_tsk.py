@@ -18,12 +18,21 @@ def _tsk(cmd: str) -> str:
     local = Path(f'{_TSK_PREFIX}{cmd}')
     return str(local) if local.exists() else cmd
 
-LOG_KEYWORDS = [
-    'var/log', 'bash_history', 'zsh_history', 'fish_history',
-    'auth.log', 'syslog', 'kern.log', 'messages', 'secure',
-    'apache', 'nginx', 'mysql', 'postgresql', 'audit', 'fail2ban',
-    'wtmp', 'btmp', 'lastlog', 'utmp', 'dpkg.log', 'apt', 'cron',
-    'openvpn', 'samba', 'postfix', 'vsftpd', 'docker',
+# Extraktion ist pfadbasiert — setzt fls -r -p voraus (volle Pfade).
+# Praefix-Match auf den normalisierten Originalpfad (lowercase, ohne fuehrendes ./).
+LOG_PATH_PREFIXES = [
+    'var/log/',                        # alle Linux-Logs: syslog, auth, apt/, apache2/,
+                                       # nginx/, journal/, audit/, samba/, mail.log, ...
+    'var/lib/wtmpdb/',                 # wtmpdb (Y2038-safe wtmp-Nachfolger, SQLite)
+    'var/lib/docker/containers/',      # Docker json-Logs
+    'var/run/utmp',                    # Live-Sessions (falls im Image vorhanden)
+    'run/utmp',
+    'windows/system32/winevt/logs/',   # Windows EVTX (NTFS-Partitionen)
+    'inetpub/logs/logfiles/',          # IIS u_ex*.log
+]
+# Dateien ausserhalb der Praefixe — Match auf den Dateinamen (Shell-Histories in Home-Dirs)
+LOG_NAME_KEYWORDS = [
+    'bash_history', 'zsh_history', 'fish_history',
 ]
 
 
@@ -215,7 +224,7 @@ def _analyse_partition(image_path: Path, offset: int, fs_type: str) -> List[str]
     entries = []
     try:
         result = subprocess.run(
-            [_tsk('fls'), '-r', '-o', str(offset), str(image_path)],
+            [_tsk('fls'), '-r', '-p', '-o', str(offset), str(image_path)],
             capture_output=True, text=True, timeout=300, errors='replace'
         )
         entries = [l for l in result.stdout.splitlines() if l.strip()]
@@ -248,13 +257,16 @@ def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str],
     all_names:  List[str] = []
 
     for entry in fls_entries:
-        if not any(kw in entry.lower() for kw in LOG_KEYWORDS):
-            continue
         parts = entry.split('\t')
         if len(parts) < 2:
             continue
         meta   = parts[0].strip()
         fpath  = parts[1].strip()
+        # Pfad normalisieren: fuehrendes './' weg, lowercase fuer Matching
+        fpath_norm = fpath.removeprefix('./').lower()
+        if not (any(fpath_norm.startswith(pre) for pre in LOG_PATH_PREFIXES)
+                or any(kw in Path(fpath_norm).name for kw in LOG_NAME_KEYWORDS)):
+            continue
         tokens = meta.split()
         if len(tokens) < 2:
             continue
@@ -295,7 +307,7 @@ def _analyse_xfs(image_path: Path, offset: int) -> List[str]:
     # fls unterstützt XFS — gleicher Output wie _analyse_partition, daher icat-kompatibel
     try:
         result = subprocess.run(
-            [_tsk('fls'), '-r', '-o', str(offset), str(image_path)],
+            [_tsk('fls'), '-r', '-p', '-o', str(offset), str(image_path)],
             capture_output=True, text=True, timeout=300, errors='replace'
         )
         entries = [l for l in result.stdout.splitlines() if l.strip()]
