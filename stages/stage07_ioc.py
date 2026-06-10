@@ -24,6 +24,32 @@ PRIVATE_IPS = re.compile(
     r'^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|0\.0\.0\.0|255\.255\.255\.255)'
 )
 
+# Review-Fix HIGH #18: DOMAIN_RE matcht auch Dateinamen ('auth.log' -> TLD
+# 'log'). Pseudo-TLDs = haeufige Dateiendungen/Suffixe, die keine echten
+# Top-Level-Domains sind -> als Domain-IOC verwerfen.
+PSEUDO_TLDS = {
+    'log', 'txt', 'gz', 'bz2', 'xz', 'zip', 'tar',
+    'conf', 'cfg', 'ini', 'rules', 'list', 'd',
+    'service', 'socket', 'timer', 'target', 'mount', 'swap', 'slice',
+    'sh', 'py', 'pl', 'rb', 'php', 'so', 'ko', 'bin', 'exe', 'dll',
+    'jpg', 'jpeg', 'png', 'gif', 'svg', 'ico',
+    'db', 'sqlite', 'json', 'xml', 'yml', 'yaml', 'csv', 'md',
+    'pid', 'lock', 'bak', 'old', 'tmp', 'dat', 'cache', 'core',
+    'journal', 'evtx', 'pcap', 'img', 'iso', 'deb', 'rpm',
+    'local', 'localdomain', 'internal', 'lan', 'home', 'arpa',
+}
+
+
+def _is_pseudo_domain(value: str, text: str, start: int) -> bool:
+    """True wenn der Domain-Treffer ein Dateiname/Pfad ist."""
+    tld = value.rsplit('.', 1)[-1].lower()
+    if tld in PSEUDO_TLDS or tld.isdigit():
+        return True
+    # Treffer direkt hinter '/' oder '\\' -> Bestandteil eines Pfades
+    if start > 0 and text[start - 1] in '/\\':
+        return True
+    return False
+
 EXTRACTORS = [
     ('ip',           IPV4_RE),
     ('ipv6',         IPV6_RE),
@@ -60,6 +86,14 @@ def run(ctx: PipelineContext) -> PipelineContext:
             for match in pattern.finditer(text):
                 value = match.group(0).strip()
                 if not value:
+                    continue
+                # Review-Fix #18: Private/reservierte IPs nicht verwerfen,
+                # aber als eigener Typ fuehren — verrauschen sonst die
+                # oeffentlichen IOCs (Lateral Movement bleibt sichtbar)
+                if ioc_type == 'ip' and PRIVATE_IPS.match(value):
+                    ioc_type = 'ip_private'
+                # Pseudo-Domains (Dateinamen, Pfad-Bestandteile) verwerfen
+                if ioc_type == 'domain' and _is_pseudo_domain(value, text, match.start()):
                     continue
                 key = (ioc_type, value)
                 if key in seen:
@@ -127,11 +161,16 @@ def _run_bulk_extractor(image_path: Path, out_dir: Path,
                 continue
             value   = parts[1].strip()
             context = parts[2].strip() if len(parts) > 2 else ''
-            if not value or (ioc_type, value) in seen:
+            real_type = ioc_type
+            if real_type == 'ip' and PRIVATE_IPS.match(value):
+                real_type = 'ip_private'
+            if real_type == 'domain' and value.rsplit('.', 1)[-1].lower() in PSEUDO_TLDS:
                 continue
-            seen.add((ioc_type, value))
+            if not value or (real_type, value) in seen:
+                continue
+            seen.add((real_type, value))
             iocs.append(IOC(
-                type      = ioc_type,
+                type      = real_type,
                 value     = value,
                 source    = 'bulk_extractor',
                 context   = context[:100],

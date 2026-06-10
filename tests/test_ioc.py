@@ -34,10 +34,15 @@ def _ctx_with_events(messages):
 
 
 def test_ip_extraction():
-    ctx = _ctx_with_events(['Connection from 192.168.1.99 blocked'])
+    # 192.168.x ist privat -> Typ 'ip_private' (Review-Fix #18:
+    # private IPs werden separat gefuehrt statt verworfen/vermischt)
+    ctx = _ctx_with_events(['Connection from 192.168.1.99 blocked '
+                            'after contact to 203.0.113.7'])
     ctx = run(ctx)
-    ips = [i for i in ctx.iocs if i.type == 'ip']
-    assert any(i.value == '192.168.1.99' for i in ips)
+    priv = [i for i in ctx.iocs if i.type == 'ip_private']
+    pub  = [i for i in ctx.iocs if i.type == 'ip']
+    assert any(i.value == '192.168.1.99' for i in priv)
+    assert any(i.value == '203.0.113.7'  for i in pub)
 
 
 def test_domain_extraction():

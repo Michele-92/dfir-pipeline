@@ -9,10 +9,18 @@ from models.pipeline_context import PipelineContext
 log = logging.getLogger(__name__)
 
 TIMESTOMPING_KEYWORDS = ['timestomp', 'touch -t', 'setfiletime', '$si', '$fn']
+# Review-Fix HIGH #17: '> /dev/null 2>&1' entfernt — Standard-Redirect in
+# praktisch jedem Cronjob, erzeugte massenhaft CRITICAL-False-Positives.
+# Echtes Log-Wiping wird ueber die /var/log-Patterns weiter erkannt.
 LOG_WIPE_KEYWORDS     = ['> /var/log', 'truncate -s 0', 'rm -f /var/log',
-                          'echo "" > /var/log', 'shred /var/log', '> /dev/null 2>&1']
-ROOTKIT_KEYWORDS      = ['insmod', 'modprobe', 'ld_preload', '/proc/kcore',
-                          'ptrace', 'sys_call_table']
+                          'echo "" > /var/log', 'shred /var/log']
+# Review-Fix HIGH #17: insmod/modprobe sind bei jedem Boot normal —
+# nur noch verdaechtig, wenn aus Shell-History/auth.log (Benutzer-Kommando)
+# oder mit Modul-Pfad in Staging-Verzeichnissen.
+ROOTKIT_KEYWORDS      = ['ld_preload', '/proc/kcore', 'sys_call_table']
+ROOTKIT_CTX_KEYWORDS  = ['insmod', 'modprobe', 'ptrace']
+ROOTKIT_CTX_SOURCES   = ('bash_history', 'zsh_history', 'fish_history', 'auth')
+ROOTKIT_CTX_PATHS     = ['/tmp/', '/var/tmp/', '/dev/shm/', '/home/']
 ADS_PATTERN           = re.compile(r'\w+:\w+')  # NTFS ADS: file:stream
 SECURE_DELETE_TOOLS   = ['shred', 'srm', 'wipe', 'bleachbit', 'dd if=/dev/zero',
                           'dd if=/dev/urandom']
@@ -120,7 +128,12 @@ def _check_rootkit_indicators(ctx: PipelineContext) -> List[Dict]:
     hits = []
     for event in tqdm(ctx.normalized_events, desc='  Rootkit-Scan', unit='Event', leave=False, dynamic_ncols=True):
         msg_lower = event.message.lower()
-        if any(kw in msg_lower for kw in ROOTKIT_KEYWORDS):
+        suspicious = any(kw in msg_lower for kw in ROOTKIT_KEYWORDS)
+        if not suspicious and any(kw in msg_lower for kw in ROOTKIT_CTX_KEYWORDS):
+            # Kontext-Pruefung: Benutzer-Kommando oder Staging-Pfad?
+            suspicious = (event.source in ROOTKIT_CTX_SOURCES
+                          or any(p in msg_lower for p in ROOTKIT_CTX_PATHS))
+        if suspicious:
             hits.append({
                 'type':     'rootkit_indicator',
                 'file':     event.file_path or 'unbekannt',
