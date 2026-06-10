@@ -228,7 +228,25 @@ def run(ctx: PipelineContext) -> PipelineContext:
     # ── Per-Partition Profiling ───────────────────────────────────────
     primary_offset = ctx.primary_partition.get('offset') if ctx.primary_partition else None
 
-    _primary_index = _index_partition(ctx.disk_image_path, primary_offset) if primary_offset else {}
+    _primary_index = get_partition_index(ctx.disk_image_path, primary_offset) if primary_offset else {}
+
+    # ── Review-Fix HIGH #11: OS-Prioritaetsmodell als Rettungsanker ──
+    # Greift wenn target-query/os-release-Erstfund versagt haben
+    # (os_family 'unknown' oder kein brauchbarer Name).
+    if primary_offset is not None and (
+            ctx.os_family in ('', 'unknown')
+            or not ctx.os_name or ctx.os_name in ('unknown', ctx.os_family)):
+        _os = detect_os_from_partition(ctx.disk_image_path, primary_offset,
+                                       _primary_index)
+        if _os['os_name']:
+            log.info(f"  OS-Kaskade: {_os['os_name']} "
+                     f"(Familie: {_os['os_family'] or '?'}) [{_os['source']}]")
+            ctx.os_name = _os['os_name']
+            if _os['os_family'] and _os['os_family'] in OS_PROFILES:
+                ctx.os_family = _os['os_family']
+                ctx.log_paths = OS_PROFILES[_os['os_family']]['log_paths']
+            elif _os['os_family']:
+                ctx.os_family = _os['os_family']   # z.B. 'suse' — Log-Pfade bleiben generisch
 
     # ── Review-Fix HIGH #9: Shadow-mtime via istat auch fuer die primaere
     # Partition (der fruehere target-query-'-f stat'-Aufruf war fehlerhaft —
@@ -445,6 +463,119 @@ def _index_partition(image_path: Path, offset: int) -> dict:
     return index
 
 
+# ── Partition-Index-Cache ────────────────────────────────────────────────
+# Stage 02 (OS-Erkennung) und Stage 03 (Profiling) brauchen denselben
+# fls-Index — der Cache stellt sicher, dass fls pro Partition nur EINMAL
+# laeuft (fls -r -p kann auf grossen Partitionen Minuten dauern).
+_INDEX_CACHE: Dict[tuple, dict] = {}
+
+
+def get_partition_index(image_path: Path, offset: int) -> dict:
+    key = (str(image_path), int(offset))
+    if key not in _INDEX_CACHE:
+        _INDEX_CACHE[key] = _index_partition(image_path, offset)
+    return _INDEX_CACHE[key]
+
+
+# ── OS-Prioritaetsmodell (Review-Fix HIGH #11) ───────────────────────────
+# Erkennungs-Kaskade PRO PARTITION, verlaesslichste Quelle zuerst.
+# Liefert immer auch die Quelle ('source') — nachpruefbare Provenienz.
+
+_OS_RELEASE_PATHS = ('etc/os-release', 'usr/lib/os-release')
+
+# (pfad_im_index, familie, name_template oder None=Dateiinhalt ist der Name)
+_DISTRO_FILES = (
+    ('etc/debian_version', 'debian', 'Debian {v}'),
+    ('etc/redhat-release', 'rhel',   None),
+    ('etc/centos-release', 'rhel',   None),
+    ('etc/fedora-release', 'rhel',   None),
+    ('etc/alpine-release', 'alpine', 'Alpine Linux {v}'),
+    ('etc/arch-release',   'arch',   'Arch Linux'),
+    ('etc/suse-release',   'suse',   None),   # Index-Keys sind lowercase
+)
+
+# (index-praefix, familie, beschreibung) — schwaechste Stufe: Heuristik
+_PKG_HEURISTICS = (
+    ('var/lib/dpkg/status',   'debian', 'Debian-Familie (dpkg-Datenbank vorhanden)'),
+    ('var/lib/rpm/',          'rhel',   'RHEL-Familie (rpm-Datenbank vorhanden)'),
+    ('lib/apk/db/installed',  'alpine', 'Alpine (apk-Datenbank vorhanden)'),
+    ('var/lib/pacman/',       'arch',   'Arch (pacman-Datenbank vorhanden)'),
+)
+
+
+def detect_os_from_partition(image_path: Path, offset: int,
+                             index: dict = None, _read=None) -> dict:
+    """Erkennt das OS EINER Partition ueber eine Prioritaeten-Kaskade.
+
+    Prioritaet:
+      1. etc/os-release          (Standard)
+      2. usr/lib/os-release      (Backup-Kopie)
+      3. Distro-Releasedateien   (debian_version, redhat-release, ...)
+      4. etc/issue               (Login-Banner)
+      5. Paketmanager-Heuristik  (dpkg/rpm/apk/pacman-Datenbank)
+
+    Rueckgabe: {'os_name', 'os_family', 'source'} — leere Strings wenn
+    nichts erkannt wurde. 'source' dokumentiert die Gewinner-Quelle.
+    _read ist injizierbar (Tests ohne TSK/Subprozesse).
+    """
+    if index is None:
+        index = get_partition_index(image_path, offset)
+    if _read is None:
+        _read = _read_icat
+    if not index:
+        return {'os_name': '', 'os_family': '', 'source': ''}
+
+    # Stufe 1+2: os-release
+    for rel_path in _OS_RELEASE_PATHS:
+        if rel_path not in index:
+            continue
+        content = _read(image_path, offset, index[rel_path])
+        if content and 'NAME=' in content:
+            name   = _extract_os_name(content)
+            family = _classify_os_family_from_content(content)
+            if name:
+                return {'os_name': name,
+                        'os_family': family if family != 'unknown' else '',
+                        'source': '/' + rel_path}
+
+    # Stufe 3: Distro-Releasedateien
+    for rel_path, family, template in _DISTRO_FILES:
+        if rel_path not in index:
+            continue
+        content = _read(image_path, offset, index[rel_path]).strip()
+        first_line = content.splitlines()[0].strip() if content else ''
+        if template is None:
+            name = first_line
+        else:
+            name = template.format(v=first_line).strip()
+        if name:
+            return {'os_name': name, 'os_family': family,
+                    'source': '/' + rel_path}
+
+    # Stufe 4: /etc/issue (Banner — getty-Escapes wie \n \l entfernen)
+    if 'etc/issue' in index:
+        content = _read(image_path, offset, index['etc/issue'])
+        if content:
+            first = content.splitlines()[0] if content.splitlines() else ''
+            clean = re.sub(r'\\[a-zA-Z]', '', first).strip()
+            family = _classify_os_family_from_content(clean)
+            if clean and family != 'unknown':
+                return {'os_name': clean, 'os_family': family,
+                        'source': '/etc/issue'}
+
+    # Stufe 5: Paketmanager-Heuristik (nur Familie, kein exakter Name)
+    for prefix, family, desc in _PKG_HEURISTICS:
+        if prefix.endswith('/'):
+            found = any(k.startswith(prefix) for k in index)
+        else:
+            found = prefix in index
+        if found:
+            return {'os_name': desc, 'os_family': family,
+                    'source': f'Heuristik: {prefix}'}
+
+    return {'os_name': '', 'os_family': '', 'source': ''}
+
+
 def _read_icat(image_path: Path, offset: int, inode: str) -> str:
     """Liest Datei-Inhalt via icat."""
     icat_cmd = shutil.which('icat') or 'icat'
@@ -491,6 +622,7 @@ def _classify_os_family_from_content(content: str) -> str:
     c = content.lower()
     if any(kw in c for kw in ('debian', 'ubuntu', 'kali', 'mint')):   return 'debian'
     if any(kw in c for kw in ('rhel', 'centos', 'fedora', 'rocky', 'alma', 'red hat')): return 'rhel'
+    if any(kw in c for kw in ('suse', 'sles', 'opensuse')): return 'suse'
     if 'arch'   in c: return 'arch'
     if 'alpine' in c: return 'alpine'
     return 'unknown'
@@ -783,19 +915,20 @@ def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
         'users': [], 'notable_users': [], 'unexpected_users': [],
         'sudo_users': [], 'groups_map': {}, 'packages': {},
         'services': {}, 'ssh_config': {}, 'virtualization': '',
+        'os_source': '',
     }
-    index = _index_partition(image_path, offset)
+    index = get_partition_index(image_path, offset)
     if not index:
         return profile
 
-    # OS
-    for os_path in ('etc/os-release', 'usr/lib/os-release'):
-        if os_path in index:
-            content = _read_icat(image_path, offset, index[os_path])
-            if content and 'NAME=' in content:
-                profile['os_name']   = _extract_os_name(content)
-                profile['os_family'] = _classify_os_family_from_content(content)
-                break
+    # OS — Prioritaetsmodell (Review-Fix #11): os-release ->
+    # Distro-Releasedateien -> issue -> Paketmanager-Heuristik,
+    # Gewinner-Quelle wird in os_source dokumentiert
+    _os = detect_os_from_partition(image_path, offset, index)
+    if _os['os_name']:
+        profile['os_name']   = _os['os_name']
+        profile['os_family'] = _os['os_family'] or 'unknown'
+        profile['os_source'] = _os['source']
 
     # Hostname
     if 'etc/hostname' in index:

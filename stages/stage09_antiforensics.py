@@ -325,8 +325,8 @@ def _check_execstop_wiping(ctx: PipelineContext) -> List[Dict]:
     offset = primary.get('offset', 0)
 
     try:
-        from stages.stage03_profiling import _index_partition, _read_icat as _ricat
-        index = _index_partition(ctx.disk_image_path, offset)
+        from stages.stage03_profiling import get_partition_index, _read_icat as _ricat
+        index = get_partition_index(ctx.disk_image_path, offset)
 
         # systemd: Debian/RHEL/Arch
         service_paths = [

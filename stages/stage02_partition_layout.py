@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from models.pipeline_context import PipelineContext
+from stages.stage03_profiling import detect_os_from_partition
 
 log = logging.getLogger(__name__)
 
@@ -51,9 +52,9 @@ def run(ctx: PipelineContext) -> PipelineContext:
         role     = _detect_role(fs_type, size_mb)
         os_name, os_family = '', ''
 
-        # OS-Erkennung nur für ROOT/DATA-Partitionen — target-query arbeitet
-        # ohne Offset auf dem ganzen Image und würde sonst das OS der primären
-        # Partition fälschlicherweise auch BOOT/EFI-Partitionen zuweisen.
+        # OS-Erkennung nur für ROOT/DATA-Partitionen — laeuft jetzt
+        # PRO PARTITION ueber das Prioritaetsmodell (Review-Fix #11).
+        # Der fls-Index wird gecacht und in Stage 03 wiederverwendet.
         if fs_type in ANALYSABLE_FS and role == 'ROOT/DATA':
             os_name, os_family = _detect_os(ctx.disk_image_path, offset)
 
@@ -163,24 +164,27 @@ def _parse_target_line(output: str) -> str:
 
 
 def _detect_os(image_path: Path, offset: int) -> tuple[str, str]:
-    """Versucht OS via target-query zu erkennen — mit offset falls unterstützt."""
+    """OS pro Partition via Prioritaets-Kaskade (Review-Fix HIGH #11).
+
+    Vorher: target-query OHNE Offset ueber das ganze Image — jede
+    ROOT-Partition bekam dasselbe OS, multi_os_detected konnte nie
+    anschlagen, BOOT/Recovery-Partitionen verfaelschten das Ergebnis.
+    """
     try:
-        result = subprocess.run(
-            ['target-query', '-f', 'os', str(image_path)],
-            capture_output=True, text=True, timeout=30
-        )
-        raw = _parse_target_line(result.stdout) or result.stdout.strip()
-        if not raw:
-            return '', ''
-        os_family = _classify_os_family(raw.lower())
-        return raw, os_family
-    except Exception:
+        res = detect_os_from_partition(image_path, offset)
+        if res['os_name']:
+            log.info(f"  OS-Erkennung offset={offset}: "
+                     f"{res['os_name']} [{res['source']}]")
+        return res['os_name'], res['os_family']
+    except Exception as e:
+        log.debug(f'OS-Kaskade fehlgeschlagen (offset={offset}): {e}')
         return '', ''
 
 
 def _classify_os_family(raw: str) -> str:
     if any(kw in raw for kw in ('debian', 'ubuntu', 'kali', 'mint')):  return 'debian'
     if any(kw in raw for kw in ('rhel', 'centos', 'fedora', 'rocky', 'alma', 'red hat')): return 'rhel'
+    if any(kw in raw for kw in ('suse', 'sles', 'opensuse')): return 'suse'
     if 'arch' in raw:   return 'arch'
     if 'alpine' in raw: return 'alpine'
     return ''
