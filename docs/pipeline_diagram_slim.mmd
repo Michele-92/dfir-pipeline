@@ -1,0 +1,63 @@
+flowchart LR
+  subgraph Inputs
+    Disk["Disk image\n(.dd / .E01 / .img)"]
+    RAM["RAM dump\n(optional)"]
+  end
+
+  PipelineContext[/"PipelineContext (ctx)"/]
+
+  Disk --> S1["Stage 01\nDetection: format, hashes, case_dir"]
+  RAM --> S2mem["Stage 02\nMemory: Volatility3 plugins"]
+  S1 --> S2mem
+  S2mem --> S2part["Stage 02\nPartition Layout: mmls, fsstat"]
+  S2part --> S3["Stage 03\nProfiling: OS, log paths, users"]
+  S3 --> S5["Stage 05\nTSK: fls / icat / tsk_recover"]
+  S5 --> S035["Stage 03.5\nBasic Checks: Log-Präsenz, Anomalien"]
+  S035 --> S6["Stage 06\nLog Parsing (38 Parser, parallel)"]
+
+  S6 --> ES["EventStore\n(DuckDB events.db)"]
+  S6 --> MAC["MACtime\nbody-file → Timeline"]
+  S6 --> S7["Stage 07\nIOC Extraction (regex, bulk_extractor)"]
+
+  ES --> S8["Stage 08\nNormalize Timestamps → UTC"]
+  S7 --> S8
+  S8 --> S9["Stage 09\nAnti-Forensics & YARA"]
+  S9 --> S13["Stage 13\nQuality Assessment"]
+  S13 --> S14["Stage 14\nExport: report.pdf, JSON, chain_of_custody.pdf"]
+  S14 --> Outputs["Outputs:\npipeline_report.json, report.pdf,\nchain_of_custody.pdf, iocs.json,\ntimesketch_link, case_dir/"]
+
+  %% Timesketch Upload Script
+  UploadScript["upload_timesketch.py\n(finds events.db + pipeline_report.json)\n-> builds JSON timeline"] -.-> S14
+  UploadScript -.-> Timesketch["Timesketch\n(interactive timeline + analysis)"]
+  Timesketch -.-> AI["Optional: AI interpretations\n(added as annotations / notes)"]
+
+  %% PipelineContext greift auf alle Stages zu
+  PipelineContext --- S1
+  PipelineContext --- S2mem
+  PipelineContext --- S2part
+  PipelineContext --- S3
+  PipelineContext --- S5
+  PipelineContext --- S035
+  PipelineContext --- S6
+  PipelineContext --- S7
+  PipelineContext --- S8
+  PipelineContext --- S9
+  PipelineContext --- S13
+  PipelineContext --- S14
+
+  %% Externe Tools
+  Volatility["Volatility3"] -.-> S2mem
+  TSK["The Sleuth Kit\n(fls, icat, mmls, tsk_recover)"] -.-> S5
+  TSK -.-> MAC
+  Bulk["bulk_extractor"] -.-> S7
+  Hayabusa["Hayabusa / Sigma"] -.-> S6
+  YARA["YARA"] -.-> S9
+
+  %% Parallelität
+  noteParallel["Hinweis:\nStage 06 nutzt ProcessPoolExecutor\n(EventStore speichert inkrementell)"]
+  S6 --- noteParallel
+
+  style PipelineContext fill:#f9f,stroke:#333,stroke-width:1px
+  style ES fill:#efe,stroke:#333,stroke-width:1px
+  style Outputs fill:#ffd,stroke:#333,stroke-width:1px
+  style MAC fill:#e8f4f8,stroke:#333,stroke-width:1px

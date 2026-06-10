@@ -25,3 +25,6 @@ config.yaml
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude lokale Einstellungen
+.claude/
