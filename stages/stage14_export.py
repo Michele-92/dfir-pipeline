@@ -1192,6 +1192,12 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
         s = (source or '').lower().strip()
         return _SRC_PATH_MAP.get(s, source or '—')
 
+    def _src_for_event(event) -> str:
+        """Echte Quelle: Originalpfad aus der Extraktion (Provenienz-Feld).
+        Fallback fuer Alt-Snapshots/Hayabusa: typischer Standardpfad."""
+        op = getattr(event, 'orig_path', '') or ''
+        return op if op else _src_path_reboot(event.source)
+
     # ── Pass 1: Reboot-Events sammeln + Session-Pairing ───────────────────────
     reboot_events = []
     with EventStore(ctx.events_db_path) as store:
@@ -1362,7 +1368,7 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
                 event.timestamp.strftime('%Y-%m-%d %H:%M:%S') if event.timestamp else '',
                 sev.upper(), event.event_type or '',
                 event.user or '', event.ip or '',
-                _src_path_reboot(event.source), event.message[:200],
+                _src_for_event(event), event.message[:200],
             ], 1):
                 c = ws_r.cell(ri, col, val)
                 c.border = _BDR
@@ -1449,10 +1455,10 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
          'sowie Keywords: "shutting down", "halt", "poweroff", '
          '"reached target shutdown" — typischerweise aus /var/log/syslog.'),
         ('Spalte "Quelle"',
-         'Zeigt den vollständigen Dateipfad der Log-Datei auf dem Image '
-         'aus der das Ereignis stammt. Beispiele: /var/log/syslog, '
-         '/var/log/auth.log, /var/log/journal/ (systemd). '
-         'Dieser Pfad kann direkt im Image nachgeprüft werden.'),
+         'Originalpfad der Log-Datei auf dem Image, dokumentiert bei der '
+         'Extraktion (TSK fls/icat, siehe extraction_manifest.json). '
+         'Direkt im Image nachpruefbar. Bei Quellen ohne Manifest-Eintrag '
+         '(z.B. Hayabusa) wird der typische Standardpfad angezeigt.'),
     ], 8)
 
     # Abschnitt 3 — Spalten der Reboot-Sheets
@@ -1474,9 +1480,9 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
         ('IP',
          'IP-Adresse die dem Ereignis zugeordnet ist, falls im Log vorhanden.'),
         ('Quelle',
-         'Vollständiger Dateipfad der Log-Quelldatei auf dem Image. '
-         'Direkt nachprüfbar — z.B. /var/log/syslog enthält '
-         'die Boot-Kernel-Meldungen.'),
+         'Originalpfad der Log-Quelldatei auf dem Image (aus dem '
+         'Extraktions-Manifest). Direkt nachpruefbar — z.B. /var/log/syslog '
+         'enthaelt die Boot-Kernel-Meldungen.'),
         ('Nachricht',
          'Original-Log-Zeile (gekürzt auf 200 Zeichen). '
          'Zeigt den genauen Wortlaut wie er in der Log-Datei steht.'),

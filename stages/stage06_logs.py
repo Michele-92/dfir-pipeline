@@ -95,15 +95,23 @@ def run(ctx: PipelineContext) -> PipelineContext:
     with EventStore(db_path) as store:
         manifest = ctx.extraction_manifest or {}
 
-        def _orig_for(lf: Path) -> str:
-            """Originalpfad auf dem Image fuer eine extrahierte Datei."""
+        def _prov_for(lf: Path) -> dict:
+            """Provenienz einer extrahierten Datei: Originalpfad auf dem
+            Image, Partition, Extraktionsmethode (Review-Punkt #7)."""
             entry = manifest.get(str(lf))
             if entry and entry.get('orig_path'):
-                return entry['orig_path']
+                off  = entry.get('partition_offset', '?')
+                idx  = entry.get('partition_index')
+                part = (f'Partition {idx} (offset {off})'
+                        if idx is not None else f'offset {off}')
+                return {'orig_path':  entry['orig_path'],
+                        'partition':  part,
+                        'extraction': entry.get('method', 'tsk_icat')}
             if ctx.case_dir:
                 # log_artefakte/p<offset>/<pfad>  bzw.
                 # disk_artefakte/partition_<offset>/<pfad> (tsk_recover)
-                for sub in ('raw/log_artefakte', 'raw/disk_artefakte'):
+                for sub, method in (('raw/log_artefakte',  'tsk_icat'),
+                                    ('raw/disk_artefakte', 'tsk_recover')):
                     base = ctx.case_dir / sub
                     try:
                         rel = lf.relative_to(base).as_posix()
@@ -111,12 +119,16 @@ def run(ctx: PipelineContext) -> PipelineContext:
                         continue
                     first, _, rest = rel.partition('/')
                     if rest and (first.startswith('p') or first.startswith('partition_')):
-                        return '/' + rest
-                    return '/' + rel
-            return ''
+                        off = first.removeprefix('partition_').removeprefix('p')
+                        return {'orig_path': '/' + rest,
+                                'partition': f'offset {off}',
+                                'extraction': method}
+                    return {'orig_path': '/' + rel, 'partition': '',
+                            'extraction': method}
+            return {'orig_path': '', 'partition': '', 'extraction': 'logs_dir'}
 
         with ProcessPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(route_and_parse, lf, _orig_for(lf)): lf
+            futures = {executor.submit(route_and_parse, lf, _prov_for(lf)): lf
                        for lf in log_files}
             progress = tqdm(
                 as_completed(futures),
@@ -128,21 +140,22 @@ def run(ctx: PipelineContext) -> PipelineContext:
             for future in progress:
                 lf = futures[future]
                 try:
-                    events = future.result()
+                    parser_name, events = future.result()
                 except Exception as e:
                     log.warning(f'Parser fehlgeschlagen für {lf.name}: {e}')
-                    events = []
+                    parser_name, events = 'fehler', []
+                # parser_file_map erfasst JEDE geroutete Datei — auch mit
+                # 0 Events (Review-Fix: Dateien ohne Treffer waren unsichtbar)
+                file_label = _prov_for(lf).get('orig_path') or str(lf)
+                if parser_name not in parser_file_map:
+                    parser_file_map[parser_name] = {'count': 0, 'files': []}
+                parser_file_map[parser_name]['count'] += len(events)
+                parser_file_map[parser_name]['files'].append(file_label)
                 if events:
                     batch.extend(events)
                     parsed_count += len(events)
                     for e in events:
                         parser_stats[e.source] = parser_stats.get(e.source, 0) + 1
-                    parser_name = events[0].source
-                    if parser_name not in parser_file_map:
-                        parser_file_map[parser_name] = {'count': len(events), 'files': [str(lf)]}
-                    else:
-                        parser_file_map[parser_name]['count'] += len(events)
-                        parser_file_map[parser_name]['files'].append(str(lf))
                     if len(batch) >= _BATCH_SIZE:
                         store.insert_events(batch)
                         batch.clear()
@@ -191,22 +204,39 @@ def run(ctx: PipelineContext) -> PipelineContext:
     return ctx
 
 
-def route_and_parse(log_file: Path, orig_path: str = '') -> List[ForensicEvent]:
-    """Routet eine Datei zum passenden Parser.
+def route_and_parse(log_file: Path, prov: dict = None):
+    """Routet eine Datei zum passenden Parser und stempelt Provenienz.
 
     can_parse() prueft den ORIGINALPFAD auf dem Image (aus dem Manifest) —
-    pfadbasierte Checks wie 'apache' in str(path) funktionieren damit wieder.
-    Geparst wird die extrahierte Datei.
+    pfadbasierte Checks wie 'apache' in str(path) funktionieren damit.
+    Geparst wird die extrahierte Datei. Jedes Event erhaelt: orig_path,
+    source_file, partition, parser_name, extraction (Review-Punkt #7).
+
+    Rueckgabe: (parser_name, events)
     """
+    prov = prov or {}
+    orig_path  = prov.get('orig_path', '')
     route_path = Path(orig_path) if orig_path else log_file
+
+    chosen = None
     for parser in ALL_PARSERS:
         if parser.name == 'text_fallback':
             continue
         if parser.can_parse(route_path):
-            log.debug(f'Parser {parser.name} → {route_path.name}')
-            return parser.safe_parse(log_file)
-    log.debug(f'Text-Fallback → {route_path.name}')
-    return PlasaFallbackParser().safe_parse(log_file)
+            chosen = parser
+            break
+    if chosen is None:
+        chosen = PlasaFallbackParser()
+    log.debug(f'Parser {chosen.name} → {route_path.name}')
+
+    events = chosen.safe_parse(log_file)
+    for e in events:
+        e.parser_name = chosen.name
+        e.source_file = str(log_file)
+        e.orig_path   = orig_path
+        e.partition   = prov.get('partition', '')
+        e.extraction  = prov.get('extraction', '')
+    return chosen.name, events
 
 
 def _find_evtx_files(ctx: PipelineContext) -> List[Path]:

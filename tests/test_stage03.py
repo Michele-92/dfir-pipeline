@@ -14,9 +14,11 @@ def test_route_syslog():
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / 'syslog'
         p.write_text('Apr 22 09:15:33 host proc[1]: test message\n')
-        events = route_and_parse(p)
+        parser_name, events = route_and_parse(p)
+        assert parser_name == 'syslog'
         assert len(events) == 1
         assert events[0].source == 'syslog'
+        assert events[0].parser_name == 'syslog'   # Provenienz-Stempel
 
 
 def test_route_auth_log():
@@ -25,7 +27,8 @@ def test_route_auth_log():
         p.write_text(
             'Apr 22 09:15:33 host sshd[1]: Accepted password for alice from 10.0.0.1 port 22\n'
         )
-        events = route_and_parse(p)
+        parser_name, events = route_and_parse(p)
+        assert parser_name == 'auth'
         ssh = [e for e in events if 'ssh' in e.event_type]
         assert len(ssh) >= 1
 

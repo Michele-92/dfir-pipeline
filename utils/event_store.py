@@ -21,7 +21,12 @@ CREATE TABLE IF NOT EXISTS events (
     file_path     VARCHAR,
     severity      VARCHAR   DEFAULT 'info',
     anomaly_score DOUBLE    DEFAULT 0.0,
-    mitre_tags    VARCHAR   DEFAULT '[]'
+    mitre_tags    VARCHAR   DEFAULT '[]',
+    orig_path     VARCHAR   DEFAULT '',
+    source_file   VARCHAR   DEFAULT '',
+    partition_label VARCHAR DEFAULT '',
+    parser_name   VARCHAR   DEFAULT '',
+    extraction    VARCHAR   DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_ts  ON events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_sev ON events(severity);
@@ -58,13 +63,16 @@ class EventStore:
         rows = [
             (e.timestamp, e.source, e.event_type, e.message,
              e.user, e.ip, e.process, e.file_path, e.severity,
-             e.anomaly_score, json.dumps(e.mitre_tags))
+             e.anomaly_score, json.dumps(e.mitre_tags),
+             e.orig_path, e.source_file, e.partition,
+             e.parser_name, e.extraction)
             for e in events
         ]
         self._conn.executemany(
             "INSERT INTO events(timestamp,source,event_type,message,username,"
-            "ip,process,file_path,severity,anomaly_score,mitre_tags) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "ip,process,file_path,severity,anomaly_score,mitre_tags,"
+            "orig_path,source_file,partition_label,parser_name,extraction) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             rows,
         )
 
@@ -74,7 +82,8 @@ class EventStore:
         """Streamt ForensicEvent-Objekte aus der DB — Stages 07-10 merken keinen Unterschied."""
         cur = self._conn.execute(
             "SELECT id,timestamp,source,event_type,message,username,"
-            "ip,process,file_path,severity,anomaly_score,mitre_tags "
+            "ip,process,file_path,severity,anomaly_score,mitre_tags,"
+            "orig_path,source_file,partition_label,parser_name,extraction "
             "FROM events ORDER BY timestamp"
         )
         while True:
@@ -88,7 +97,8 @@ class EventStore:
         """Lädt alle Events als sortierte ForensicEvent-Liste (für ctx.normalized_events)."""
         rows = self._conn.execute(
             "SELECT id,timestamp,source,event_type,message,username,"
-            "ip,process,file_path,severity,anomaly_score,mitre_tags "
+            "ip,process,file_path,severity,anomaly_score,mitre_tags,"
+            "orig_path,source_file,partition_label,parser_name,extraction "
             "FROM events ORDER BY timestamp"
         ).fetchall()
         return [self._row_to_event(r) for r in rows]
@@ -137,4 +147,9 @@ class EventStore:
             severity      = row[9] or 'info',
             anomaly_score = float(row[10] or 0.0),
             mitre_tags    = json.loads(row[11] or '[]'),
+            orig_path     = (row[12] or '') if len(row) > 12 else '',
+            source_file   = (row[13] or '') if len(row) > 13 else '',
+            partition     = (row[14] or '') if len(row) > 14 else '',
+            parser_name   = (row[15] or '') if len(row) > 15 else '',
+            extraction    = (row[16] or '') if len(row) > 16 else '',
         )
