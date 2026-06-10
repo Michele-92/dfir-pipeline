@@ -12,6 +12,7 @@ from tqdm import tqdm
 from models.pipeline_context import PipelineContext
 from models.event import ForensicEvent
 from utils.event_store import EventStore
+from stages.stage05_tsk import LOG_PATH_PREFIXES, LOG_NAME_KEYWORDS
 from parsers import (
     JournaldParser, WtmpParser, UtmpParser, LastlogParser, EVTXParser,
     AuthLogParser, SSHParser, CronParser, AuditParser, Fail2BanParser,
@@ -280,6 +281,22 @@ def _find_log_files(ctx: PipelineContext) -> List[Path]:
         if log_artefakte.is_dir():
             for f in log_artefakte.rglob('*'):
                 if f.is_file():
+                    log_files.append(f)
+
+        # Wiederhergestellte geloeschte Dateien (tsk_recover, Stage 05) —
+        # forensisch besonders relevant. Nur log-relevante Pfade aufnehmen,
+        # gleiche Filterlogik wie die Extraktion in Stage 05.
+        disk_artefakte = ctx.case_dir / 'raw' / 'disk_artefakte'
+        if disk_artefakte.is_dir():
+            for f in disk_artefakte.rglob('*'):
+                if not f.is_file():
+                    continue
+                rel = f.relative_to(disk_artefakte).as_posix().lower()
+                # fuehrenden Partitionsordner (partition_<offset>/) abschneiden
+                first, _, rest = rel.partition('/')
+                rel_path = rest if first.startswith('partition_') and rest else rel
+                if (any(rel_path.startswith(pre) for pre in LOG_PATH_PREFIXES)
+                        or any(kw in Path(rel_path).name for kw in LOG_NAME_KEYWORDS)):
                     log_files.append(f)
 
     log_files = list({f.resolve(): f for f in log_files}.values())

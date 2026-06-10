@@ -157,13 +157,20 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
 
 def _is_present(log_path: str, extracted: set) -> bool:
-    """Prüft ob ein Log-Pfad in den extrahierten Dateien vorkommt.
-    Stage 05 speichert nur Basenames (z.B. 'messages') — daher Basename-Vergleich."""
-    log_name = log_path.lower().rstrip('/').split('/')[-1]
-    return any(
-        log_name == f.lower() or log_name in f.lower() or f.lower() in log_path.lower()
-        for f in extracted
-    )
+    """Prueft ob ein erwarteter Log-Pfad extrahiert wurde.
+
+    Stage 05 liefert seit dem Manifest-Umbau vollstaendige Originalpfade
+    (z.B. '/var/log/auth.log') — der Vergleich ist daher streng pfadbasiert:
+      - exakter Pfad            /var/log/syslog
+      - rotierte Varianten      /var/log/syslog.1, .2.gz
+      - Verzeichnis-Erwartung   /var/log/postgresql/ -> alles darunter
+    """
+    needle = '/' + log_path.strip('/').lower()
+    for f in extracted:
+        fl = f.lower() if f.startswith('/') else '/' + f.lower()
+        if fl == needle or fl.startswith(needle + '/') or fl.startswith(needle + '.'):
+            return True
+    return False
 
 
 def _get_installed_packages(ctx: PipelineContext) -> set:
