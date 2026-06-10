@@ -251,11 +251,19 @@ def run(ctx: PipelineContext) -> PipelineContext:
     # ── Review-Fix HIGH #9: Shadow-mtime via istat auch fuer die primaere
     # Partition (der fruehere target-query-'-f stat'-Aufruf war fehlerhaft —
     # /etc/shadow wurde als Target interpretiert -> Ergebnis fast immer leer)
-    if not ctx.shadow_mtime and primary_offset is not None and 'etc/shadow' in _primary_index:
-        ctx.shadow_mtime = _read_shadow_mtime_tsk(
-            ctx.disk_image_path, primary_offset, _primary_index['etc/shadow'])
-        if ctx.shadow_mtime:
-            log.info(f'  Shadow-mtime via istat: {ctx.shadow_mtime}')
+    if not ctx.shadow_mtime and primary_offset is not None:
+        if 'etc/shadow' in _primary_index:
+            ctx.shadow_mtime = _read_shadow_mtime_tsk(
+                ctx.disk_image_path, primary_offset, _primary_index['etc/shadow'])
+            if ctx.shadow_mtime:
+                log.info(f'  Shadow-mtime via istat: {ctx.shadow_mtime}')
+            else:
+                log.warning('  /etc/shadow im Index, aber istat lieferte '
+                            'keine mtime — istat-Output pruefen!')
+        else:
+            log.warning('  /etc/shadow NICHT im Partitions-Index '
+                        f'(Index: {len(_primary_index)} Eintraege) — '
+                        'geloescht oder fls unvollstaendig?')
 
     # ── Review-Fix HIGH #10: Machine-ID — target-query liefert fuer Linux-
     # Targets meist nichts; Fallback-Kette via icat (inkl. dbus-Pfad).
@@ -592,28 +600,45 @@ def _read_icat(image_path: Path, offset: int, inode: str) -> str:
 
 
 def _read_shadow_mtime_tsk(image_path: Path, offset: int, inode: str) -> str:
-    """Liest Modifikationszeit einer Datei via istat.
+    """Liest die Modifikationszeit (mtime) einer Datei via istat.
 
-    Unterstützt beide TSK-Ausgabeformate:
-      Alte TSK: 'Modified:       Thu Mar 12 00:17:01 2020'  (Wert auf gleicher Zeile)
-      Neue TSK: 'Modified:'  + nächste Zeile: '2020-03-12 00:17:01 (UTC)'
+    Unterstuetzt ALLE bekannten TSK-Ausgabeformate (Review-Nachfix:
+    'File Modified:' wurde vorher nicht erkannt -> Shadow-mtime blieb leer):
+      TSK 4.x ext4:  'File Modified:  2020-03-12 00:17:01.000000000 (UTC)'
+      aelteres TSK:  'Modified:       Thu Mar 12 00:17:01 2020'
+      Header-Stil:   'Modified:' + Wert auf der naechsten Zeile
+    'Inode Modified:' (ctime) wird bewusst NICHT verwendet.
     """
+    return _read_mtime_istat(image_path, offset, inode)
+
+
+def _read_mtime_istat(image_path: Path, offset: int, inode: str) -> str:
     istat_cmd = shutil.which('istat') or 'istat'
     try:
         res = subprocess.run(
             [istat_cmd, '-o', str(offset), str(image_path), inode],
             capture_output=True, text=True, timeout=10, errors='replace'
         )
-        lines = res.stdout.splitlines()
-        for i, line in enumerate(lines):
-            if line.strip().lower().startswith('modified:'):
-                value = line.split(':', 1)[1].strip()
-                if value:
-                    return value                      # altes Format: Wert auf gleicher Zeile
-                elif i + 1 < len(lines):
-                    return lines[i + 1].strip()       # neues Format: Wert auf nächster Zeile
+        return _parse_istat_mtime(res.stdout)
     except Exception:
         pass
+    return ''
+
+
+def _parse_istat_mtime(istat_output: str) -> str:
+    """Extrahiert die mtime aus istat-Output — von istat-Aufruf getrennt,
+    damit alle Formatvarianten ohne TSK testbar sind."""
+    lines = istat_output.splitlines()
+    for i, line in enumerate(lines):
+        low = line.strip().lower()
+        if low.startswith('inode modified'):
+            continue                              # ctime — nicht die mtime
+        if low.startswith(('file modified:', 'modified:')):
+            value = line.split(':', 1)[1].strip()
+            if value:
+                return value                      # Wert auf gleicher Zeile
+            if i + 1 < len(lines):
+                return lines[i + 1].strip()       # Wert auf naechster Zeile
     return ''
 
 

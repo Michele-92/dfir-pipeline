@@ -83,3 +83,30 @@ def test_multi_os_pro_partition_unterscheidbar():
     fam2 = detect_os_from_partition(IMG, 999999, {'etc/redhat-release': 'i1'},
         _reader({'i1': 'Rocky Linux release 9.2'}))['os_family']
     assert {fam1, fam2} == {'debian', 'rhel'}
+
+
+# ── istat-mtime-Parsing (Shadow-Nachfix) ─────────────────────────────────
+
+from stages.stage03_profiling import _parse_istat_mtime
+
+
+def test_istat_mtime_tsk4_file_modified():
+    out = ("Inode Times:\n"
+           "Accessed:               2020-03-13 11:02:00.000000000 (UTC)\n"
+           "File Modified:          2020-03-12 00:17:01.123456789 (UTC)\n"
+           "Inode Modified:         2020-03-12 00:17:02.000000000 (UTC)\n")
+    assert _parse_istat_mtime(out) == '2020-03-12 00:17:01.123456789 (UTC)'
+
+
+def test_istat_mtime_altformat_gleiche_zeile():
+    assert _parse_istat_mtime('Modified:  Thu Mar 12 00:17:01 2020\n') == \
+        'Thu Mar 12 00:17:01 2020'
+
+
+def test_istat_mtime_naechste_zeile():
+    assert _parse_istat_mtime('Modified:\n2020-03-12 00:17:01 (UTC)\n') == \
+        '2020-03-12 00:17:01 (UTC)'
+
+
+def test_istat_ctime_wird_ignoriert():
+    assert _parse_istat_mtime('Inode Modified: 2020-03-12 00:17:02 (UTC)\n') == ''
