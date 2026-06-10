@@ -18,9 +18,18 @@ class LastlogParser(BaseParser):
     def can_parse(self, path: Path) -> bool:
         return 'lastlog' in path.name.lower()
 
+    # lastlog ist sparse (292 Bytes x hoechste UID) — mit System-UIDs wie
+    # 65534/nobody oder systemd-Dynamic-UIDs kann die extrahierte Datei
+    # gigantisch werden. Deckel schuetzt vor OOM.
+    MAX_BYTES = 50 * 1024 * 1024
+
     def parse(self, path: Path) -> List[ForensicEvent]:
         events = []
-        data   = path.read_bytes()
+        try:
+            with path.open('rb') as f:
+                data = f.read(self.MAX_BYTES)
+        except (PermissionError, OSError):
+            return []
         uid    = 0
         offset = 0
         while offset + LASTLOG_SIZE <= len(data):

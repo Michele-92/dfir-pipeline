@@ -60,7 +60,7 @@ class BaseParser(ABC):
     # Max. Bytes pro Textdatei — OOM-Schutz: grosse Binaerdateien
     # (Journal, Datenbanken) rissen sonst den Worker-Prozess und damit
     # den gesamten ProcessPool (105 'fehler'-Dateien im Praxistest).
-    MAX_READ_BYTES = 100 * 1024 * 1024   # 100 MB
+    MAX_READ_BYTES = 50 * 1024 * 1024    # 50 MB (Worker laufen parallel!)
     # Max. Zeilen — Binaerdaten mit vielen 0x0A-Bytes erzeugen sonst
     # Millionen Pseudo-Zeilen (Listen-Overhead > Dateigroesse)
     MAX_LINES      = 1_000_000

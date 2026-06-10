@@ -1,5 +1,6 @@
 import subprocess
 import json
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,13 @@ class JournaldParser(BaseParser):
         except FileNotFoundError:
             return events
 
+        # Watchdog: killt journalctl nach TIMEOUT_S von AUSSEN.
+        # Noetig, weil 'for line in proc.stdout' blockiert, wenn journalctl
+        # auf einer korrupten Journal-Datei nie eine erste Zeile liefert —
+        # die Inline-Deadline wuerde dann nie geprueft (Stage-6-Haenger).
+        watchdog = threading.Timer(self.TIMEOUT_S, proc.kill)
+        watchdog.daemon = True
+        watchdog.start()
         deadline  = time.monotonic() + self.TIMEOUT_S
         truncated = False
         try:
@@ -67,6 +75,7 @@ class JournaldParser(BaseParser):
                 except (json.JSONDecodeError, ValueError, TypeError):
                     continue
         finally:
+            watchdog.cancel()
             try:
                 proc.kill()
                 proc.wait(timeout=5)

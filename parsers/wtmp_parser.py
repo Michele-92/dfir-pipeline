@@ -20,9 +20,12 @@ class WtmpParser(BaseParser):
     def can_parse(self, path: Path) -> bool:
         return path.name.startswith('wtmp') and not path.name.endswith('.db')
 
+    MAX_BYTES = 50 * 1024 * 1024   # wtmp ist realistisch < wenige MB
+
     def parse(self, path: Path) -> List[ForensicEvent]:
         try:
-            data = path.read_bytes()
+            with path.open('rb') as f:
+                data = f.read(self.MAX_BYTES)
         except (PermissionError, OSError):
             return []
         events = []
