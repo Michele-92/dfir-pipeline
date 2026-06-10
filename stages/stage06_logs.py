@@ -193,8 +193,16 @@ def run(ctx: PipelineContext) -> PipelineContext:
         # ── Sequenzieller Rettungspfad nach Pool-Absturz ──────────────────
         if retry_seq:
             log.info(f'  Sequenzielle Nachverarbeitung: {len(retry_seq)} Dateien')
-            for lf in tqdm(retry_seq, desc='  Stage 6 (sequenziell)',
-                           unit='Datei', dynamic_ncols=True):
+            seq_bar = tqdm(retry_seq, desc='  Stage 6 (sequenziell)',
+                           unit='Datei', dynamic_ncols=True)
+            for lf in seq_bar:
+                # aktuelle Datei + Groesse anzeigen — bei Haengern sieht
+                # man sofort, WELCHE Datei verantwortlich ist
+                try:
+                    _mb = lf.stat().st_size / 1e6
+                except OSError:
+                    _mb = 0
+                seq_bar.set_postfix_str(f'{lf.name} ({_mb:.0f} MB)')
                 try:
                     parser_name, events = route_and_parse(
                         lf, _prov_for(lf), system_tz)

@@ -61,6 +61,9 @@ class BaseParser(ABC):
     # (Journal, Datenbanken) rissen sonst den Worker-Prozess und damit
     # den gesamten ProcessPool (105 'fehler'-Dateien im Praxistest).
     MAX_READ_BYTES = 100 * 1024 * 1024   # 100 MB
+    # Max. Zeilen — Binaerdaten mit vielen 0x0A-Bytes erzeugen sonst
+    # Millionen Pseudo-Zeilen (Listen-Overhead > Dateigroesse)
+    MAX_LINES      = 1_000_000
 
     def read_lines(self, path: Path) -> List[str]:
         # gzip transparent lesen — rotierte Logs (.gz) fuer ALLE Parser
@@ -71,7 +74,7 @@ class BaseParser(ABC):
                     data = f.read(self.MAX_READ_BYTES)
             except (OSError, EOFError):
                 return []
-            return data.decode('utf-8', errors='replace').splitlines()
+            return self._bounded_lines(data)
         try:
             size = path.stat().st_size
             with path.open('rb') as f:
@@ -81,4 +84,13 @@ class BaseParser(ABC):
                             f'{self.MAX_READ_BYTES/1e6:.0f} MB gelesen (OOM-Schutz)')
         except (OSError, PermissionError):
             return []
-        return data.decode('utf-8', errors='replace').splitlines()
+        return self._bounded_lines(data)
+
+    def _bounded_lines(self, data: bytes) -> List[str]:
+        text = data.decode('utf-8', errors='replace')
+        # split mit maxsplit haelt den Speicher beschraenkt — der Rest
+        # landet ungesplittet im letzten Element und wird verworfen
+        lines = text.split('\n', self.MAX_LINES)
+        if len(lines) > self.MAX_LINES:
+            lines = lines[:self.MAX_LINES]
+        return [l.rstrip('\r') for l in lines]
