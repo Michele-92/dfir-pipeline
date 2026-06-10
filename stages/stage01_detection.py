@@ -46,9 +46,13 @@ def run(ctx: PipelineContext) -> PipelineContext:
         md5, sha1 = read_e01_hashes(path)
         if md5:
             ctx.md5        = md5
-            ctx.sha256     = sha1
+            # Review-Fix CRITICAL #5: der E01-eingebettete Hash ist SHA1 —
+            # er wurde frueher in ctx.sha256 gespeichert und ueberall
+            # faelschlich als 'SHA256' deklariert. ctx.sha256 bleibt leer,
+            # bis tatsaechlich ein SHA256 berechnet wurde.
+            ctx.sha1       = sha1 or ''
             ctx.hash_source = 'E01-eingebettet'
-            log.info(f'E01-Hash gelesen: MD5={md5[:16]}...')
+            log.info(f'E01-Hash gelesen: MD5={md5}  SHA1={sha1 or "—"}')
         else:
             log.info('E01-Hash nicht lesbar — berechne neu...')
             ctx.sha256, ctx.md5 = compute_both(path)
@@ -67,6 +71,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
     ctx.coc = ChainOfCustody(
         file_name  = path.name,
         sha256     = ctx.sha256,
+        sha1       = ctx.sha1,
         md5        = ctx.md5,
         size_gb    = ctx.file_size_gb,
         start_time = datetime.utcnow(),

@@ -118,16 +118,6 @@ def run(ctx: PipelineContext) -> PipelineContext:
     ctx.tsk_results          = results
     ctx.tsk_log_files_extracted = total_log_extracted
 
-    # Extraktions-Manifest persistieren — Grundlage fuer Provenienz (Stage 6/14),
-    # Basic Checks (Stage 3.5) und Chain of Custody
-    if ctx.case_dir and ctx.extraction_manifest:
-        import json
-        manifest_path = ctx.case_dir / 'extraction_manifest.json'
-        manifest_path.write_text(
-            json.dumps(ctx.extraction_manifest, indent=2, ensure_ascii=False),
-            encoding='utf-8')
-        log.info(f'  Extraktions-Manifest: {len(ctx.extraction_manifest)} Eintraege → {manifest_path}')
-
     out_dir = ctx.case_dir / 'raw' / 'disk_artefakte' if ctx.case_dir else Path('/tmp/tsk_out')
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -154,6 +144,16 @@ def run(ctx: PipelineContext) -> PipelineContext:
     if ctx.coc and ctx.case_dir:
         _hash_extracted_files(ctx.case_dir / 'raw' / 'log_artefakte', ctx)
         _hash_extracted_files(out_dir, ctx)
+
+    # Extraktions-Manifest persistieren (NACH dem Hashing, damit sha256/md5
+    # im JSON stehen) — Grundlage fuer Provenienz, Basic Checks und CoC
+    if ctx.case_dir and ctx.extraction_manifest:
+        import json
+        manifest_path = ctx.case_dir / 'extraction_manifest.json'
+        manifest_path.write_text(
+            json.dumps(ctx.extraction_manifest, indent=2, ensure_ascii=False),
+            encoding='utf-8')
+        log.info(f'  Extraktions-Manifest: {len(ctx.extraction_manifest)} Eintraege → {manifest_path}')
 
     log.info(f'  TSK: {sum(len(v) for v in results.values())} Einträge')
     log.info(f'  Gelöscht gefunden: {ctx.tsk_deleted_found} | '
@@ -184,12 +184,24 @@ def run_mactime_after_stage6(ctx: PipelineContext) -> PipelineContext:
 def _hash_extracted_files(directory: Path, ctx) -> None:
     if not directory.is_dir():
         return
+    base = ctx.case_dir if ctx.case_dir else directory
     for f in directory.rglob('*'):
         if not f.is_file():
             continue
         try:
-            sha256, _ = compute_both(f)
-            ctx.coc.add_file_hash(f.name, sha256)
+            sha256, md5 = compute_both(f)
+            # Key = relativer Pfad statt Basename (Kollisionen zwischen
+            # Partitionen ueberschrieben frueher CoC-Eintraege)
+            try:
+                key = f.relative_to(base).as_posix()
+            except ValueError:
+                key = f.name
+            ctx.coc.add_file_hash(key, sha256, md5)
+            # Manifest anreichern — Hashes gehoeren zur Provenienz
+            entry = ctx.extraction_manifest.get(str(f))
+            if entry is not None:
+                entry['sha256'] = sha256
+                entry['md5']    = md5
         except Exception:
             pass
 

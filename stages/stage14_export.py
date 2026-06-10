@@ -1987,10 +1987,20 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     story.append(_body('Automatisch generierter forensischer Analysebericht'))
     story.append(_spacer(8))
 
+    # Review-Fix #19/#5: Hashes IMMER vollstaendig, Label nach Hash-Art
+    # (E01 bettet MD5+SHA1 ein — frueher wurde SHA1 als 'SHA256' angezeigt
+    #  und zusaetzlich auf 32 Zeichen gekuerzt)
+    _e01 = ctx.hash_source == 'E01-eingebettet'
     kv1 = [
         ['Case-ID',    case_id],       ['Erstellt',    created],
         ['Dauer',      f'{duration} Minuten'], ['Format', ctx.file_type],
-        ['SHA256',     ctx.sha256[:32]+'...'],  ['MD5',   ctx.md5],
+    ]
+    if getattr(ctx, 'sha1', ''):
+        kv1.append(['SHA1 (E01-eingebettet)', ctx.sha1])
+    if ctx.sha256:
+        kv1.append(['SHA256', ctx.sha256])
+    kv1 += [
+        ['MD5 (E01-eingebettet)' if _e01 else 'MD5', ctx.md5 or '?'],
         ['Qualitaet',  quality],       ['IOC-Qualitaet', ctx.ioc_quality],
     ]
     story.append(_h2('Case-Informationen'))
@@ -3374,10 +3384,18 @@ def _generate_coc_pdf(ctx: PipelineContext, case_dir: Path) -> None:
                 f'EXTRAHIERTE DATEIEN — HASHWERTE ({len(coc.extracted_file_hashes)} Dateien)',
                 C_MID_BLUE, C_WHITE, 11, W))
             story.append(Spacer(1, 3*mm))
-            hash_rows = [['Dateiname', 'SHA256']]
-            for fname, sha in sorted(coc.extracted_file_hashes.items()):
-                hash_rows.append([fname[:50], sha])
-            t3 = Table(hash_rows, colWidths=[60*mm, W - 60*mm], repeatRows=1)
+            hash_rows = [['Datei (Pfad)', 'SHA256', 'MD5']]
+            for fname, h in sorted(coc.extracted_file_hashes.items()):
+                if isinstance(h, dict):
+                    sha, md5 = h.get('sha256', ''), h.get('md5', '')
+                else:                       # Alt-Format (Snapshot-Reexport)
+                    sha, md5 = h, ''
+                # Pfad ggf. links kuerzen — Hashes NIEMALS kuerzen
+                hash_rows.append([('…' + fname[-48:]) if len(fname) > 49 else fname,
+                                  sha, md5])
+            t3 = Table(hash_rows,
+                       colWidths=[52*mm, (W - 52*mm) * 0.62, (W - 52*mm) * 0.38],
+                       repeatRows=1)
             t3.setStyle(TableStyle([
                 ('BACKGROUND',    (0,0), (-1,0), _rl_color_from_tuple(C_MID_BLUE)),
                 ('TEXTCOLOR',     (0,0), (-1,0), _rl_color_from_tuple(C_WHITE)),

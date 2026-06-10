@@ -183,8 +183,12 @@ class PipelineUI:
             t.add_row('Größe (Disk-Image)',   f'{ctx.file_size_gb:.2f} GB  [dim](logisch / unkomprimiert)[/dim]')
         else:
             t.add_row('Größe',      f'{ctx.file_size_gb:.2f} GB')
-        t.add_row('SHA256',     ctx.sha256[:32] + '...' if ctx.sha256 else '?')
-        t.add_row('MD5',        ctx.md5[:32] + '...' if ctx.md5 else '?')
+        # Review-Fix #19: Hashes vollstaendig anzeigen — keine Kuerzung
+        if getattr(ctx, 'sha1', ''):
+            t.add_row('SHA1 (E01)', ctx.sha1)
+        if ctx.sha256:
+            t.add_row('SHA256',  ctx.sha256)
+        t.add_row('MD5',        ctx.md5 if ctx.md5 else '?')
         hash_src = getattr(ctx, 'hash_source', 'Berechnet')
         hash_style = 'green' if hash_src == 'E01-eingebettet' else 'dim'
         t.add_row('Hash-Quelle', Text(f'✅ {hash_src}' if hash_src == 'E01-eingebettet' else hash_src, style=hash_style))

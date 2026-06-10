@@ -24,6 +24,7 @@ class PipelineContext:
     file_size_compressed_gb: float = 0.0  # physische Dateigröße auf Disk (nur E01/EWF)
     sha256:                 str   = ''
     md5:                    str   = ''
+    sha1:                   str   = ''   # E01-eingebetteter Hash ist SHA1 (nicht SHA256!)
 
     # ── Stage 2: Memory ───────────────────────────────────
     memory_results:     Dict[str, Any] = field(default_factory=dict)

@@ -21,11 +21,14 @@ class ChainOfCustody:
     md5:        str
     size_gb:    float
     start_time: datetime
+    sha1:       str = ''
     entries:               List[CoCEntry]      = field(default_factory=list)
     extracted_file_hashes: Dict[str, str]      = field(default_factory=dict)
 
     def add_entry(self, stage: str, action: str) -> None:
         self.entries.append(CoCEntry(stage=stage, action=action))
 
-    def add_file_hash(self, filename: str, sha256: str) -> None:
-        self.extracted_file_hashes[filename] = sha256
+    def add_file_hash(self, filename: str, sha256: str, md5: str = '') -> None:
+        # Wert ist ein Dict (sha256 + md5) — Review-Fix #19: MD5 wurde
+        # frueher berechnet und verworfen, Key war kollisionsanfaelliger Basename
+        self.extracted_file_hashes[filename] = {'sha256': sha256, 'md5': md5}

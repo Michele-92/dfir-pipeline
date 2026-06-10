@@ -292,7 +292,11 @@ def _build_cover(ctx) -> List:
         ["Hostname",     hostname],
         ["OS",           os_name],
         ["Zeitzone",     timezone],
-        ["Image-SHA256", f"{sha256[:48]}..." if len(str(sha256)) > 48 else sha256],
+        # Review-Fix #19: Hash vollstaendig — niemals kuerzen
+        ["Image-SHA1 (E01)" if getattr(ctx, "sha1", "") and not str(sha256).strip("—")
+         else "Image-SHA256",
+         getattr(ctx, "sha1", "") if getattr(ctx, "sha1", "") and not str(sha256).strip("—")
+         else sha256],
         ["Image-Größe",  f"{file_size} GB"],
         ["Erstellt",     datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")],
     ]

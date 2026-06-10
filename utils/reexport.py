@@ -88,6 +88,7 @@ def save_ctx_snapshot(ctx: PipelineContext, case_dir: Path) -> None:
         'disk_image_path': str(ctx.disk_image_path) if ctx.disk_image_path else None,
         'ram_dump_path':   str(ctx.ram_dump_path)   if ctx.ram_dump_path   else None,
         'sha256':          ctx.sha256,
+        'sha1':            getattr(ctx, 'sha1', ''),
         'md5':             ctx.md5,
         'file_size_gb':    ctx.file_size_gb,
         'file_type':       ctx.file_type,
@@ -198,6 +199,7 @@ def save_ctx_snapshot(ctx: PipelineContext, case_dir: Path) -> None:
         'coc': {
             'file_name':  ctx.coc.file_name,
             'sha256':     ctx.coc.sha256,
+            'sha1':       ctx.coc.sha1,
             'md5':        ctx.coc.md5,
             'size_gb':    ctx.coc.size_gb,
             'start_time': ctx.coc.start_time.isoformat(),
@@ -333,6 +335,7 @@ def reconstruct_ctx(snapshot_path: Path, new_case_dir: Path) -> PipelineContext:
         coc = ChainOfCustody(
             file_name  = coc_data['file_name'],
             sha256     = coc_data['sha256'],
+            sha1       = coc_data.get('sha1', ''),
             md5        = coc_data['md5'],
             size_gb    = coc_data['size_gb'],
             start_time = datetime.fromisoformat(coc_data['start_time']),
@@ -354,6 +357,7 @@ def reconstruct_ctx(snapshot_path: Path, new_case_dir: Path) -> PipelineContext:
         file_type        = data.get('file_type', ''),
         file_size_gb     = data.get('file_size_gb', 0.0),
         sha256           = data.get('sha256', ''),
+        sha1             = data.get('sha1', ''),
         md5              = data.get('md5', ''),
         hash_source      = data.get('hash_source', 'Snapshot'),
 
