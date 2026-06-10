@@ -230,6 +230,30 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
     _primary_index = _index_partition(ctx.disk_image_path, primary_offset) if primary_offset else {}
 
+    # ── Review-Fix HIGH #9: Shadow-mtime via istat auch fuer die primaere
+    # Partition (der fruehere target-query-'-f stat'-Aufruf war fehlerhaft —
+    # /etc/shadow wurde als Target interpretiert -> Ergebnis fast immer leer)
+    if not ctx.shadow_mtime and primary_offset is not None and 'etc/shadow' in _primary_index:
+        ctx.shadow_mtime = _read_shadow_mtime_tsk(
+            ctx.disk_image_path, primary_offset, _primary_index['etc/shadow'])
+        if ctx.shadow_mtime:
+            log.info(f'  Shadow-mtime via istat: {ctx.shadow_mtime}')
+
+    # ── Review-Fix HIGH #10: Machine-ID — target-query liefert fuer Linux-
+    # Targets meist nichts; Fallback-Kette via icat (inkl. dbus-Pfad).
+    # Plausibilitaet: machine-id ist immer 32 Hex-Zeichen.
+    if ctx.machine_id and not re.fullmatch(r'[0-9a-f]{32}', ctx.machine_id.strip()):
+        ctx.machine_id = ''
+    if not ctx.machine_id and primary_offset is not None:
+        for _mid_path in ('etc/machine-id', 'var/lib/dbus/machine-id'):
+            if _mid_path in _primary_index:
+                _raw = _read_icat(ctx.disk_image_path, primary_offset,
+                                  _primary_index[_mid_path]).strip()
+                if re.fullmatch(r'[0-9a-f]{32}', _raw):
+                    ctx.machine_id = _raw
+                    log.info(f'  Machine-ID via TSK ({_mid_path}): {_raw}')
+                    break
+
     # TSK-Fallback für Nutzer: falls target-query keinen regulären User (UID ≥ 1000) liefert,
     # /etc/passwd direkt via TSK/icat lesen. Bedingung: KEIN User mit UID ≥ 1000 vorhanden
     # (nicht nur komplett leere Liste — target-query kann root parsen aber UID-1000-User verpassen).
@@ -398,9 +422,12 @@ def _index_partition(image_path: Path, offset: int) -> dict:
     fls_cmd = shutil.which('fls') or 'fls'
     index   = {}
     try:
+        # Timeout 600s (Review-Fix #12): bei grossen Partitionen lief fls
+        # laenger als die frueheren 60s -> leerer Index -> komplettes
+        # Sekundaer-Profil zeigte 'Unbekannt'. Stage 05 nutzt ebenfalls 300-600s.
         res = subprocess.run(
             [fls_cmd, '-r', '-p', '-o', str(offset), str(image_path)],
-            capture_output=True, text=True, timeout=60, errors='replace'
+            capture_output=True, text=True, timeout=600, errors='replace'
         )
         for line in res.stdout.splitlines():
             if '\t' not in line:
@@ -408,7 +435,10 @@ def _index_partition(image_path: Path, offset: int) -> dict:
             meta, path = line.split('\t', 1)
             parts = meta.strip().split()
             inode = parts[-1].rstrip(':')
-            path_norm = path.strip().lstrip('./').lower()
+            # removeprefix statt lstrip('./') — lstrip frass ALLE fuehrenden
+            # Punkte/Slashes und machte '.dockerenv' zu 'dockerenv'
+            # (Virtualisierungserkennung Docker/LXC war dadurch tot)
+            path_norm = path.strip().removeprefix('./').lower()
             index[path_norm] = inode
     except Exception as e:
         log.debug(f'  fls Index fehlgeschlagen (offset={offset}): {e}')
@@ -780,11 +810,13 @@ def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
             profile['timezone']         = raw.strip()
             profile['timezone_display'] = _format_timezone_display(raw.strip())
 
-    # Machine-ID
-    if 'etc/machine-id' in index:
-        raw = _read_icat(image_path, offset, index['etc/machine-id'])
-        if raw:
-            profile['machine_id'] = raw.strip()
+    # Machine-ID (Fallback-Kette inkl. dbus — Review-Fix #10)
+    for mid_path in ('etc/machine-id', 'var/lib/dbus/machine-id'):
+        if mid_path in index:
+            raw = _read_icat(image_path, offset, index[mid_path]).strip()
+            if re.fullmatch(r'[0-9a-f]{32}', raw):
+                profile['machine_id'] = raw
+                break
 
     # Kernel (aus /boot/vmlinuz-* Dateinamen) — alle Versionen, nicht nur erste
     all_k = _read_all_kernels(index)
@@ -826,7 +858,7 @@ def _profile_partition_tsk(image_path: Path, offset: int) -> dict:
     profile['sudo_users']    = sudo_list
     profile['groups_map']    = groups_map
     profile['packages']      = _read_installed_packages(image_path, offset, index, profile['os_family'])
-    profile['services']      = _read_enabled_services(index)
+    profile['services']      = _read_enabled_services(index, profile['os_family'])
     profile['ssh_config']    = _read_ssh_config(image_path, offset, index)
     profile['virtualization']= _detect_virtualization(index)
     profile['usage_period']  = _read_usage_period(image_path, offset, index, profile['os_family'])
@@ -1280,14 +1312,10 @@ def _profile_users(image_path, os_family: str = '') -> Tuple[list, str, list, li
     except Exception as e:
         log.debug(f'target-query users fehlgeschlagen: {e}')
 
-    try:
-        result = subprocess.run(
-            ['target-query', '-f', 'stat', '/etc/shadow', str(image_path)],
-            capture_output=True, text=True, timeout=15
-        )
-        shadow_mtime = _parse_target_line(result.stdout) or result.stdout.strip()
-    except Exception:
-        pass
+    # Review-Fix: der fruehere Aufruf ['target-query','-f','stat','/etc/shadow',
+    # image] war fehlerhaft — target-query interpretiert '/etc/shadow' als
+    # weiteres TARGET (Disk-Image). shadow_mtime wird jetzt in run() via
+    # istat auf der primaeren Partition ermittelt.
 
     notable     = [u['name'] for u in users
                    if not u.get('is_system', True) and u.get('login_allowed', False)]
@@ -1316,7 +1344,10 @@ def _parse_users(raw: str, os_family: str = '') -> list:
                     'gid':             int(parts[3]) if parts[3].isdigit() else -1,
                     'home':            parts[5] if len(parts) > 5 else '',
                     'shell':           parts[6].strip() if len(parts) > 6 else '',
-                    'login_allowed':   parts[6].strip() not in ('/bin/false', '/usr/sbin/nologin', '') if len(parts) > 6 else False,
+                    'login_allowed':   parts[6].strip() not in (
+                        '/bin/false', '/usr/sbin/nologin',
+                        '/sbin/nologin', '/bin/nologin', '',
+                    ) if len(parts) > 6 else False,
                     'is_system':       is_system,
                     'is_known_system': is_known_sys,
                     'is_unexpected':   is_system and not is_known_sys and uid > 0,
@@ -1360,14 +1391,14 @@ def _index_symlinks(image_path: Path, offset: int) -> Dict[str, str]:
     try:
         res = subprocess.run(
             [fls_cmd, '-r', '-p', '-o', str(offset), str(image_path)],
-            capture_output=True, text=True, timeout=60, errors='replace'
+            capture_output=True, text=True, timeout=600, errors='replace'
         )
         for line in res.stdout.splitlines():
             if not line.startswith('l/l') or '\t' not in line:
                 continue
             meta, path = line.split('\t', 1)
             inode  = meta.strip().split()[-1].rstrip(':')
-            path_n = path.strip().lstrip('./').lower()
+            path_n = path.strip().removeprefix('./').lower()
             try:
                 res2 = subprocess.run(
                     [icat_cmd, '-o', str(offset), str(image_path), inode],

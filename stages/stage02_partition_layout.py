@@ -116,7 +116,11 @@ def _read_partitions(image_path: Path) -> List[dict]:
                     partitions.append({
                         'index': int(parts[0].rstrip(':')),
                         'start': int(parts[2]),
-                        'size':  int(parts[3]) if len(parts) > 3 else 0,
+                        # mmls-Spalten: Slot | Start | End | Length | Desc
+                        # parts[3] ist der END-Sektor — Groesse ist parts[4]!
+                        # (Review-Fix #14: Groesse war vorher offsetabhaengig
+                        #  zu gross -> falsche Rollen + falsche Primaerwahl)
+                        'size':  int(parts[4]) if len(parts) > 4 else 0,
                     })
                 except ValueError:
                     continue
