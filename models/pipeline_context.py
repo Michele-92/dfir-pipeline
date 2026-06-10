@@ -63,6 +63,9 @@ class PipelineContext:
     tsk_deleted_recovered:     int            = 0
     tsk_deleted_not_recovered: int            = 0
     tsk_extracted_filenames:   List[str]      = field(default_factory=list)
+    # {extrahierter_pfad: {orig_path, partition_offset, partition_index,
+    #                      inode, deleted, success, method}}
+    extraction_manifest:       Dict[str, dict] = field(default_factory=dict)
     tsk_mactime_events:        int            = 0
     tsk_mactime_file:          str            = ''
     tsk_sorter_ran:            bool           = False

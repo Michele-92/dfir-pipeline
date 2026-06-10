@@ -521,9 +521,11 @@ class PipelineUI:
         t.add_row('', '')
         t.add_row('Log-Dateien extrahiert', f"{ctx.tsk_log_files_extracted:,}")
 
-        # Alle Dateinamen anzeigen
-        for fname in ctx.tsk_extracted_filenames:
+        # Liste ist vollstaendig (Originalpfade) — Anzeige auf 15 begrenzen
+        for fname in ctx.tsk_extracted_filenames[:15]:
             t.add_row('', f"  → {fname}")
+        if len(ctx.tsk_extracted_filenames) > 15:
+            t.add_row('', f"  … und {len(ctx.tsk_extracted_filenames) - 15:,} weitere (siehe extraction_manifest.json)")
 
         t.add_row('', '')
         t.add_row('Gelöschte Dateien gefunden',

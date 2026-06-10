@@ -107,14 +107,26 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
         if (fs_type in FS_TYPES or fs_type == 'xfs') and part_result and ctx.case_dir:
             log_dir = ctx.case_dir / 'raw' / 'log_artefakte'
-            n, filenames = _extract_log_files(
-                ctx.disk_image_path, offset, part_result, log_dir, ctx.workers)
+            n, orig_paths, manifest_part = _extract_log_files(
+                ctx.disk_image_path, offset, part_result, log_dir, ctx.workers,
+                part_index=part.get('index'))
             total_log_extracted += n
-            ctx.tsk_extracted_filenames.extend(filenames)
-            log.info(f'  {n} Log-Dateien aus Partition {offset} extrahiert → {log_dir}')
+            ctx.tsk_extracted_filenames.extend(orig_paths)
+            ctx.extraction_manifest.update(manifest_part)
+            log.info(f'  {n} Log-Dateien aus Partition {offset} extrahiert → {log_dir}/p{offset}')
 
     ctx.tsk_results          = results
     ctx.tsk_log_files_extracted = total_log_extracted
+
+    # Extraktions-Manifest persistieren — Grundlage fuer Provenienz (Stage 6/14),
+    # Basic Checks (Stage 3.5) und Chain of Custody
+    if ctx.case_dir and ctx.extraction_manifest:
+        import json
+        manifest_path = ctx.case_dir / 'extraction_manifest.json'
+        manifest_path.write_text(
+            json.dumps(ctx.extraction_manifest, indent=2, ensure_ascii=False),
+            encoding='utf-8')
+        log.info(f'  Extraktions-Manifest: {len(ctx.extraction_manifest)} Eintraege → {manifest_path}')
 
     out_dir = ctx.case_dir / 'raw' / 'disk_artefakte' if ctx.case_dir else Path('/tmp/tsk_out')
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -236,6 +248,7 @@ def _analyse_partition(image_path: Path, offset: int, fs_type: str) -> List[str]
 def _icat_extract(args: Tuple) -> bool:
     image_path, offset, inode, out_file = args
     try:
+        out_file.parent.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
             [_tsk('icat'), '-o', str(offset), str(image_path), inode],
             capture_output=True, timeout=30
@@ -249,12 +262,19 @@ def _icat_extract(args: Tuple) -> bool:
 
 
 def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str],
-                       log_dir: Path, workers: int = 2) -> Tuple[int, List[str]]:
-    log_dir.mkdir(parents=True, exist_ok=True)
+                       log_dir: Path, workers: int = 2,
+                       part_index=None) -> Tuple[int, List[str], dict]:
+    """Extrahiert log-relevante Dateien einer Partition via icat.
 
+    Zielstruktur: log_dir/p<offset>/<originalpfad>
+    — kollisionsfrei ueber mehrere Partitionen, Originalpfad bleibt erhalten.
+
+    Rueckgabe: (anzahl_erfolgreich, originalpfade_erfolgreich, manifest)
+    manifest = {extrahierter_pfad: {orig_path, partition_offset,
+                partition_index, inode, deleted, success, method}}
+    """
     work_items: List[Tuple] = []
-    used_names: set = set()
-    all_names:  List[str] = []
+    used_out:   set = set()
 
     for entry in fls_entries:
         parts = entry.split('\t')
@@ -262,10 +282,14 @@ def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str],
             continue
         meta   = parts[0].strip()
         fpath  = parts[1].strip()
-        # Pfad normalisieren: fuehrendes './' weg, lowercase fuer Matching
-        fpath_norm = fpath.removeprefix('./').lower()
-        if not (any(fpath_norm.startswith(pre) for pre in LOG_PATH_PREFIXES)
-                or any(kw in Path(fpath_norm).name for kw in LOG_NAME_KEYWORDS)):
+        # Nur regulaere Dateien extrahieren — Verzeichnisse (d/d) ueberspringen
+        if meta.startswith('d/'):
+            continue
+        # Pfad normalisieren: fuehrendes './' weg, lowercase nur fuers Matching
+        rel = fpath.removeprefix('./').lstrip('/')
+        rel_norm = rel.lower()
+        if not (any(rel_norm.startswith(pre) for pre in LOG_PATH_PREFIXES)
+                or any(kw in Path(rel_norm).name for kw in LOG_NAME_KEYWORDS)):
             continue
         tokens = meta.split()
         if len(tokens) < 2:
@@ -273,18 +297,29 @@ def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str],
         inode = tokens[-1].rstrip(':').split('-')[0]
         if not inode.isdigit():
             continue
-        out_name = Path(fpath).name.replace(':', '_')
-        if out_name in used_names:
-            out_name = f'{inode}_{out_name}'
-        used_names.add(out_name)
-        all_names.append(out_name)
-        work_items.append((image_path, offset, inode, log_dir / out_name))
+        is_deleted = ' * ' in f' {meta} '   # fls markiert geloeschte Eintraege mit *
 
-    log.info(f'  {len(work_items):,} Log-relevante Einträge — starte Extraktion mit {workers} Threads...')
+        rel_safe = rel.replace(':', '_')    # NTFS-ADS / Sonderzeichen
+        out_file = log_dir / f'p{offset}' / rel_safe
+        if str(out_file) in used_out:
+            # gleicher Pfad doppelt im fls-Output (z.B. allozierte + geloeschte
+            # Version) — Inode anhaengen statt ueberschreiben
+            out_file = out_file.with_name(f'{out_file.name}.inode{inode}')
+        used_out.add(str(out_file))
+        work_items.append((image_path, offset, inode, out_file,
+                           '/' + rel, is_deleted))
 
-    extracted = 0
+    log.info(f'  {len(work_items):,} Log-relevante Eintraege — starte Extraktion mit {workers} Threads...')
+
+    extracted  = 0
+    orig_paths: List[str] = []
+    manifest:   dict      = {}
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(_icat_extract, item): item for item in work_items}
+        futures = {
+            executor.submit(_icat_extract, item[:4]): item
+            for item in work_items
+        }
         progress = tqdm(
             as_completed(futures),
             total=len(work_items),
@@ -293,14 +328,26 @@ def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str],
             dynamic_ncols=True,
         )
         for future in progress:
+            _img, _off, inode, out_file, orig_path, is_deleted = futures[future]
             try:
-                if future.result():
-                    extracted += 1
-                    progress.set_postfix({'extrahiert': extracted})
+                ok = bool(future.result())
             except Exception:
-                pass
+                ok = False
+            if ok:
+                extracted += 1
+                orig_paths.append(orig_path)
+                progress.set_postfix({'extrahiert': extracted})
+            manifest[str(out_file)] = {
+                'orig_path':        orig_path,
+                'partition_offset': offset,
+                'partition_index':  part_index,
+                'inode':            inode,
+                'deleted':          is_deleted,
+                'success':          ok,
+                'method':           'tsk_icat',
+            }
 
-    return extracted, all_names[:10]  # erste 10 Dateinamen für Anzeige
+    return extracted, orig_paths, manifest
 
 
 def _analyse_xfs(image_path: Path, offset: int) -> List[str]:
