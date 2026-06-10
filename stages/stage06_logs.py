@@ -182,7 +182,10 @@ def run(ctx: PipelineContext) -> PipelineContext:
                     parser_name, events = 'fehler', []
                 _handle_result(lf, parser_name, events)
                 try:
-                    total_lines += sum(1 for _ in lf.open('rb'))
+                    # Zeilenzaehlung nur fuer Dateien <= 100 MB —
+                    # GB-Journale hier nochmal zu lesen kostet Minuten
+                    if lf.stat().st_size <= 100 * 1024 * 1024:
+                        total_lines += sum(1 for _ in lf.open('rb'))
                 except Exception:
                     pass
                 progress.set_postfix({'Events': f'{parsed_count:,}'})
@@ -200,7 +203,10 @@ def run(ctx: PipelineContext) -> PipelineContext:
                     parser_name, events = 'fehler', []
                 _handle_result(lf, parser_name, events)
                 try:
-                    total_lines += sum(1 for _ in lf.open('rb'))
+                    # Zeilenzaehlung nur fuer Dateien <= 100 MB —
+                    # GB-Journale hier nochmal zu lesen kostet Minuten
+                    if lf.stat().st_size <= 100 * 1024 * 1024:
+                        total_lines += sum(1 for _ in lf.open('rb'))
                 except Exception:
                     pass
         if batch:
