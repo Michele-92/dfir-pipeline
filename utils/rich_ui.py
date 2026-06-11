@@ -444,7 +444,10 @@ class PipelineUI:
                 p_title  = f'[bold green]⭐ Primäre Partition  [{idx}]  {fs}  ·  {size:,.0f} MB[/bold green]'
                 p_border = 'green'
             else:
-                p_title  = f'[cyan]Partition  [{idx}]  {fs}  ·  {size:,.0f} MB[/cyan]'
+                role     = profile.get('role', '')
+                role_str = f'  ·  {role}' if role else ''
+                hint     = '  (Boot-Partition — kein OS erwartet)' if role == 'BOOT' else ''
+                p_title  = f'[cyan]Partition  [{idx}]  {fs}  ·  {size:,.0f} MB{role_str}{hint}[/cyan]'
                 p_border = 'dim'
 
             tbl = _build_profile_table(profile, is_primary)

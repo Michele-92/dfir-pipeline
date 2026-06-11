@@ -420,6 +420,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
             'size_mb':         p['size_mb'],
             'fs_type':         p['fs_type'],
             'offset':          p['offset'],
+            'role':            p.get('role', ''),
             'ip_addresses':    [],
         })
         partition_profiles.append(prof)
