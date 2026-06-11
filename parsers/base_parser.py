@@ -71,9 +71,17 @@ class BaseParser(ABC):
             import gzip
             try:
                 with gzip.open(path, 'rb') as f:
-                    data = f.read(self.MAX_READ_BYTES)
+                    # 1 Byte mehr lesen als der Deckel: ist es da, wissen
+                    # wir dass gekappt wurde (entpackte Groesse ist vorab
+                    # nicht bekannt) -> Warnung statt stiller Kappung
+                    data = f.read(self.MAX_READ_BYTES + 1)
             except (OSError, EOFError):
                 return []
+            if len(data) > self.MAX_READ_BYTES:
+                log.warning(f'{path.name}: entpackt > '
+                            f'{self.MAX_READ_BYTES/1e6:.0f} MB — nur erste '
+                            f'{self.MAX_READ_BYTES/1e6:.0f} MB gelesen (OOM-Schutz)')
+                data = data[:self.MAX_READ_BYTES]
             return self._bounded_lines(data)
         try:
             size = path.stat().st_size
