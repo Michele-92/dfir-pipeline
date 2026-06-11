@@ -2640,18 +2640,35 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     story.append(_spacer(4))
     loaded_k_s7      = getattr(ctx, 'loaded_kernel_from_logs', '') or '-'
     all_kernels_s7   = getattr(ctx, 'all_kernel_versions', [])
+    # Provenienz-Label der primaeren Partition (Review-Punkt #7:
+    # jeder Wert mit nachpruefbarer Quelle — Datei, Methode, Partition)
+    _pp_idx = primary_profile.get('partition_index', '?')
+    _pp_off = primary_profile.get('offset', '?')
+    _pp_lbl = f'Partition {_pp_idx} (offset {_pp_off})'
+    _os_src = primary_profile.get('os_source', '')
     kv3 = [
         ['OS-Familie',               ctx.os_family or '-'],
         ['OS-Name',                  ctx.os_name or '-'],
+        ['OS-Erkennungsquelle',      _os_src or 'target-query (ganzes Image)'],
         ['Kernel (target-query)',    ctx.kernel_version or '-'],
         ['Kernel (geladen, Logs)',   loaded_k_s7],
         ['Alle installierten Kernel', ', '.join(all_kernels_s7) or '-'],
         ['Hostname',                 ctx.hostname or '-'],
         ['Zeitzone',                 getattr(ctx, 'timezone_display', None) or ctx.timezone or '-'],
+        ['Machine-ID',               (f'{ctx.machine_id}   [/etc/machine-id via TSK icat, {_pp_lbl}]'
+                                      if ctx.machine_id else '-')],
+        ['/etc/shadow geaendert',    (f'{ctx.shadow_mtime}   [TSK istat auf /etc/shadow, {_pp_lbl}] '
+                                      f'— letzte Passwort-/Benutzeraenderung'
+                                      if ctx.shadow_mtime else '-')],
         ['Image-Format',             ctx.file_type],
         ['Image-Groesse',            f'{ctx.file_size_gb:.2f} GB'],
-        ['SHA256',                   ctx.sha256],
-        ['MD5',                      ctx.md5],
+    ]
+    if getattr(ctx, 'sha1', ''):
+        kv3.append(['SHA1 (E01-eingebettet)', ctx.sha1])
+    if ctx.sha256:
+        kv3.append(['SHA256', ctx.sha256])
+    kv3 += [
+        ['MD5',                      ctx.md5 or '-'],
         ['Virtualisierung',          primary_profile.get('virtualization', '-')],
     ]
     story.append(_kv_table(kv3, W, _rl_color))

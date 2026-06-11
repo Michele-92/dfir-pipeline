@@ -427,7 +427,10 @@ class PipelineUI:
             else:
                 t.add_row('Nutzer', Text('nicht vorhanden', style='dim'))
             sm = profile.get('shadow_mtime', '')
-            t.add_row('/etc/shadow', f'Letzte Änderung: {sm}' if sm else Text('nicht vorhanden', style='dim'))
+            _p_lbl = f"Partition {profile.get('partition_index', '?')}"
+            t.add_row('/etc/shadow',
+                      f'Letzte Änderung: {sm}   [TSK istat, {_p_lbl}]'
+                      if sm else Text('nicht vorhanden', style='dim'))
             return t
 
         inner_panels = []
