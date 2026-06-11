@@ -128,7 +128,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
                             'extraction': method}
             return {'orig_path': '', 'partition': '', 'extraction': 'logs_dir'}
 
-        system_tz = ctx.timezone or 'UTC'
+        system_tz   = ctx.timezone or 'UTC'
+        max_read_mb = getattr(ctx, 'max_read_mb', 50)
 
         def _handle_result(lf, parser_name, events):
             """Verbucht das Ergebnis einer Datei (Pool- UND Sequenz-Pfad)."""
@@ -152,7 +153,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
         retry_seq: List[Path] = []
         with ProcessPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(route_and_parse, lf, _prov_for(lf),
-                                       system_tz): lf
+                                       system_tz, max_read_mb): lf
                        for lf in log_files}
             progress = tqdm(
                 as_completed(futures),
@@ -205,7 +206,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
                 seq_bar.set_postfix_str(f'{lf.name} ({_mb:.0f} MB)')
                 try:
                     parser_name, events = route_and_parse(
-                        lf, _prov_for(lf), system_tz)
+                        lf, _prov_for(lf), system_tz, max_read_mb)
                 except Exception as e:
                     log.warning(f'Parser fehlgeschlagen für {lf.name}: {e}')
                     parser_name, events = 'fehler', []
@@ -258,7 +259,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
 
 def route_and_parse(log_file: Path, prov: dict = None,
-                    system_tz: str = 'UTC'):
+                    system_tz: str = 'UTC', max_read_mb: int = 50):
     """Routet eine Datei zum passenden Parser und stempelt Provenienz.
 
     can_parse() prueft den ORIGINALPFAD auf dem Image (aus dem Manifest) —
@@ -284,6 +285,15 @@ def route_and_parse(log_file: Path, prov: dict = None,
     log.debug(f'Parser {chosen.name} → {route_path.name}')
 
     chosen.system_tz = system_tz   # naive Log-Zeiten = Image-Zeitzone
+    # Lese-Deckel konfigurierbar (--max-read-mb, 0 = unbegrenzt) —
+    # Klassenattribut wirkt im jeweiligen Worker-Prozess
+    from parsers.base_parser import BaseParser
+    if max_read_mb and max_read_mb > 0:
+        BaseParser.MAX_READ_BYTES = max_read_mb * 1024 * 1024
+        BaseParser.MAX_LINES      = max(1_000_000, max_read_mb * 20_000)
+    else:
+        BaseParser.MAX_READ_BYTES = 1 << 62   # praktisch unbegrenzt
+        BaseParser.MAX_LINES      = 1 << 62
     events = chosen.safe_parse(log_file)
     for e in events:
         e.parser_name = chosen.name

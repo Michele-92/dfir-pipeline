@@ -104,6 +104,10 @@ def main():
     parser.add_argument('--debug',             action='store_true', help='Debug-Logging aktivieren')
     parser.add_argument('--workers',           type=int, default=2,
                         help='Anzahl paralleler Worker für Stage 6 + Stage 5 (Standard: 2)')
+    parser.add_argument('--max-read-mb',       type=int, default=50,
+                        help='Max. MB pro Log-Datei in Stage 6 (entpackt). '
+                             '0 = unbegrenzt. Faustregel RAM-Bedarf: '
+                             'Worker x 4 x diesem Wert (Standard: 50)')
     parser.add_argument('--mode', choices=['auto', 'manual'], default='auto',
                         help='auto=vollautomatisch | manual=Kontrollmodus mit Tool-Auswahl pro Partition')
     parser.add_argument('--yara', choices=['custom', 'linux', 'full'], default='custom',
@@ -144,6 +148,7 @@ def main():
         skip_mactime        = args.no_mactime,
         interactive_mode    = (args.mode == 'manual'),
         yara_mode           = args.yara,
+        max_read_mb         = args.max_read_mb,
     )
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
 

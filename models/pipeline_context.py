@@ -39,6 +39,7 @@ class PipelineContext:
 
     # ── Performance ───────────────────────────────────────
     workers:             int  = 2
+    max_read_mb:         int  = 50   # 0 = unbegrenzt (--max-read-mb)
     skip_bulk_extractor: bool = False
     skip_mactime:        bool = False
 
