@@ -175,5 +175,13 @@ class PipelineContext:
     # ── Stage 05 erweitert ────────────────────────────────
     tool_selection:     Dict[str, str] = field(default_factory=dict)
 
+    # ── Fall-Modus (mehrere Images = ein Fall) ────────────
+    evidence_label:     str        = ''   # aktuelles Image waehrend Stage 1-5
+    combined_case:      bool       = False
+    # pro Image: {name, path, file_type, size_gb, md5, sha1, sha256,
+    #             hash_source, partition_layout, partition_profiles,
+    #             os_name, os_family, hostname, basic_checks}
+    evidence_items:     List[dict] = field(default_factory=list)
+
     # ── Pipeline-Modi ─────────────────────────────────────
     yara_mode:          str = 'custom'

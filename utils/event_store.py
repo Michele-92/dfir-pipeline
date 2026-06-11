@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS events (
     severity      VARCHAR   DEFAULT 'info',
     anomaly_score DOUBLE    DEFAULT 0.0,
     mitre_tags    VARCHAR   DEFAULT '[]',
+    evidence      VARCHAR   DEFAULT '',
     orig_path     VARCHAR   DEFAULT '',
     source_file   VARCHAR   DEFAULT '',
     partition_label VARCHAR DEFAULT '',
@@ -64,15 +65,15 @@ class EventStore:
             (e.timestamp, e.source, e.event_type, e.message,
              e.user, e.ip, e.process, e.file_path, e.severity,
              e.anomaly_score, json.dumps(e.mitre_tags),
-             e.orig_path, e.source_file, e.partition,
+             e.evidence, e.orig_path, e.source_file, e.partition,
              e.parser_name, e.extraction)
             for e in events
         ]
         self._conn.executemany(
             "INSERT INTO events(timestamp,source,event_type,message,username,"
             "ip,process,file_path,severity,anomaly_score,mitre_tags,"
-            "orig_path,source_file,partition_label,parser_name,extraction) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "evidence,orig_path,source_file,partition_label,parser_name,extraction) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             rows,
         )
 
@@ -83,7 +84,7 @@ class EventStore:
         cur = self._conn.execute(
             "SELECT id,timestamp,source,event_type,message,username,"
             "ip,process,file_path,severity,anomaly_score,mitre_tags,"
-            "orig_path,source_file,partition_label,parser_name,extraction "
+            "evidence,orig_path,source_file,partition_label,parser_name,extraction "
             "FROM events ORDER BY timestamp"
         )
         while True:
@@ -98,7 +99,7 @@ class EventStore:
         rows = self._conn.execute(
             "SELECT id,timestamp,source,event_type,message,username,"
             "ip,process,file_path,severity,anomaly_score,mitre_tags,"
-            "orig_path,source_file,partition_label,parser_name,extraction "
+            "evidence,orig_path,source_file,partition_label,parser_name,extraction "
             "FROM events ORDER BY timestamp"
         ).fetchall()
         return [self._row_to_event(r) for r in rows]
@@ -149,9 +150,10 @@ class EventStore:
             severity      = row[9] or 'info',
             anomaly_score = float(row[10] or 0.0),
             mitre_tags    = json.loads(row[11] or '[]'),
-            orig_path     = (row[12] or '') if len(row) > 12 else '',
-            source_file   = (row[13] or '') if len(row) > 13 else '',
-            partition     = (row[14] or '') if len(row) > 14 else '',
-            parser_name   = (row[15] or '') if len(row) > 15 else '',
-            extraction    = (row[16] or '') if len(row) > 16 else '',
+            evidence      = (row[12] or '') if len(row) > 12 else '',
+            orig_path     = (row[13] or '') if len(row) > 13 else '',
+            source_file   = (row[14] or '') if len(row) > 14 else '',
+            partition     = (row[15] or '') if len(row) > 15 else '',
+            parser_name   = (row[16] or '') if len(row) > 16 else '',
+            extraction    = (row[17] or '') if len(row) > 17 else '',
         )

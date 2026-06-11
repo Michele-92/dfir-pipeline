@@ -17,6 +17,7 @@ class ForensicEvent:
     anomaly_score: float          = 0.0
     mitre_tags:    List[str]      = field(default_factory=list)
     # ── Provenienz (Review-Architekturpunkt #7) ───────────────
+    evidence:      str            = ''   # Image/Beweisstueck (webserver.E01) — Fall-Modus
     orig_path:     str            = ''   # Pfad auf dem Image (/var/log/auth.log)
     source_file:   str            = ''   # extrahierte Datei (log_artefakte/p2048/...)
     partition:     str            = ''   # z.B. 'Partition 2 (offset 2048)'
