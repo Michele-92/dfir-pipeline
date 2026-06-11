@@ -93,6 +93,8 @@ def save_ctx_snapshot(ctx: PipelineContext, case_dir: Path) -> None:
         'file_size_gb':    ctx.file_size_gb,
         'file_type':       ctx.file_type,
         'hash_source':     ctx.hash_source,
+        'combined_case':   getattr(ctx, 'combined_case', False),
+        'evidence_items':  getattr(ctx, 'evidence_items', []),
 
         # ── System-Profil ────────────────────────────────────
         'os_family':        ctx.os_family,
@@ -212,6 +214,7 @@ def save_ctx_snapshot(ctx: PipelineContext, case_dir: Path) -> None:
                 for e in ctx.coc.entries
             ],
             'extracted_file_hashes': ctx.coc.extracted_file_hashes,
+            'evidence_hashes':       getattr(ctx.coc, 'evidence_hashes', {}),
         } if ctx.coc else None,
     }
 
@@ -345,6 +348,7 @@ def reconstruct_ctx(snapshot_path: Path, new_case_dir: Path) -> PipelineContext:
             entry.timestamp = datetime.fromisoformat(e['timestamp'])
             coc.entries.append(entry)
         coc.extracted_file_hashes = coc_data.get('extracted_file_hashes', {})
+        coc.evidence_hashes       = coc_data.get('evidence_hashes', {})
         # Reexport-Eintrag hinzufügen
         coc.add_entry('reexport', f'Dokumente neu erstellt aus Snapshot — {new_case_dir.name}')
 
@@ -388,6 +392,8 @@ def reconstruct_ctx(snapshot_path: Path, new_case_dir: Path) -> PipelineContext:
         primary_symlinks        = data.get('primary_symlinks', {}),
         rc_local_content        = data.get('rc_local_content', ''),
 
+        combined_case       = data.get('combined_case', False),
+        evidence_items      = data.get('evidence_items', []),
         partition_profiles  = data.get('partition_profiles', []),
         tsk_partitions      = data.get('tsk_partitions', []),
         analysis_partitions = data.get('analysis_partitions', []),

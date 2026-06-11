@@ -253,6 +253,14 @@ _PATH_CATEGORY_MAP = [
 ]
 
 
+def _evidence_source(event) -> str:
+    """Quelle eines Events mit Image-Praefix im Fall-Modus.
+    '[webserver.E01] /var/log/auth.log' bzw. nur die Quelle bei 1 Image."""
+    ev  = getattr(event, 'evidence', '') or ''
+    src = getattr(event, 'orig_path', '') or getattr(event, 'source', '') or ''
+    return f'[{ev}] {src}' if ev else src
+
+
 def _classify_event(event) -> Optional[str]:
     """Klassifiziert Event als REBOOT/LOGIN/CRASH — strukturiert zuerst, Keyword-Fallback."""
     et = (event.event_type or '').lower()
@@ -1194,9 +1202,11 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
 
     def _src_for_event(event) -> str:
         """Echte Quelle: Originalpfad aus der Extraktion (Provenienz-Feld).
-        Fallback fuer Alt-Snapshots/Hayabusa: typischer Standardpfad."""
+        Im Fall-Modus mit [Image]-Praefix. Fallback: typischer Standardpfad."""
         op = getattr(event, 'orig_path', '') or ''
-        return op if op else _src_path_reboot(event.source)
+        base = op if op else _src_path_reboot(event.source)
+        ev = getattr(event, 'evidence', '') or ''
+        return f'[{ev}] {base}' if ev else base
 
     # ── Pass 1: Reboot-Events sammeln + Session-Pairing ───────────────────────
     reboot_events = []
@@ -2014,6 +2024,35 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     story.append(_kv_table(kv1, W, _rl_color))
     story.append(_spacer(6))
 
+    # ── Fall-Modus: Uebersicht aller analysierten Images ──────────────────
+    _evi = getattr(ctx, 'evidence_items', []) or []
+    if getattr(ctx, 'combined_case', False) and _evi:
+        story.append(_h2(f'Fall-Uebersicht — {len(_evi)} Beweisstuecke (Images)'))
+        story.append(_spacer(2))
+        ev_rows = [['#', 'Image', 'OS', 'Hostname', 'Format', 'Groesse']]
+        for i, ev in enumerate(_evi, 1):
+            ev_rows.append([
+                str(i), ev.get('name', '-'),
+                (ev.get('os_name') or ev.get('os_family') or '-')[:28],
+                ev.get('hostname') or '-',
+                ev.get('file_type', '-'),
+                f"{ev.get('file_size_gb', 0):.1f} GB",
+            ])
+        story.append(_table(ev_rows, [10*mm, 42*mm, 46*mm, 32*mm, 18*mm, 22*mm]))
+        story.append(_spacer(3))
+        # Hashes pro Image (forensisch getrennt) — vollstaendig
+        coc_ev = ctx.coc.evidence_hashes if ctx.coc else {}
+        for ev in _evi:
+            h = coc_ev.get(ev.get('name', ''), {})
+            hr = [['Image', ev.get('name', '-')]]
+            if h.get('sha1'):   hr.append(['SHA1 (E01)', h['sha1']])
+            if h.get('sha256'): hr.append(['SHA256', h['sha256']])
+            if h.get('md5'):    hr.append(['MD5', h['md5']])
+            if len(hr) > 1:
+                story.append(_kv_table(hr, W, _rl_color))
+                story.append(_spacer(2))
+        story.append(_spacer(4))
+
     kv2 = [
         ['OS',           ctx.os_name or '-'],
         ['Kernel',       ctx.kernel_version or '-'],
@@ -2191,15 +2230,18 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
         key=lambda e: e.timestamp
     )[:50]
     if timeline_events:
-        rows = [['Zeitstempel (UTC)', 'Ereignis', 'Quelle', 'Schwere']]
+        _combined_tl = getattr(ctx, 'combined_case', False)
+        _src_hdr = 'Image / Quelle' if _combined_tl else 'Quelle'
+        rows = [['Zeitstempel (UTC)', 'Ereignis', _src_hdr, 'Schwere']]
         for e in timeline_events:
+            _src = (_evidence_source(e)[:34] if _combined_tl else (e.source or '')[:20])
             rows.append([
                 e.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-                e.message[:80],
-                e.source[:20],
+                e.message[:70],
+                _src,
                 e.severity.upper(),
             ])
-        story.append(_table(rows, [42*mm, 90*mm, 22*mm, 16*mm]))
+        story.append(_table(rows, [40*mm, 78*mm, 36*mm, 16*mm]))
     else:
         story.append(_body('Keine relevanten Timeline-Events.'))
     story.append(_spacer(5))
@@ -2638,75 +2680,103 @@ def _generate_report_pdf(ctx: PipelineContext, case_dir: Path) -> None:
     # ── Seite 7: System-Profiling ─────────────────────────────────────────────
     story.append(_h1('System-Profiling'))
     story.append(_spacer(4))
-    loaded_k_s7      = getattr(ctx, 'loaded_kernel_from_logs', '') or '-'
-    all_kernels_s7   = getattr(ctx, 'all_kernel_versions', [])
-    # Provenienz-Label der primaeren Partition (Review-Punkt #7:
-    # jeder Wert mit nachpruefbarer Quelle — Datei, Methode, Partition)
-    _pp_idx = primary_profile.get('partition_index', '?')
-    _pp_off = primary_profile.get('offset', '?')
-    _pp_lbl = f'Partition {_pp_idx} (offset {_pp_off})'
-    _os_src = primary_profile.get('os_source', '')
-    kv3 = [
-        ['OS-Familie',               ctx.os_family or '-'],
-        ['OS-Name',                  ctx.os_name or '-'],
-        ['OS-Erkennungsquelle',      _os_src or 'target-query (ganzes Image)'],
-        ['Kernel (target-query)',    ctx.kernel_version or '-'],
-        ['Kernel (geladen, Logs)',   loaded_k_s7],
-        ['Alle installierten Kernel', ', '.join(all_kernels_s7) or '-'],
-        ['Hostname',                 ctx.hostname or '-'],
-        ['Zeitzone',                 getattr(ctx, 'timezone_display', None) or ctx.timezone or '-'],
-        ['Machine-ID',               (f'{ctx.machine_id}   [/etc/machine-id via TSK icat, {_pp_lbl}]'
-                                      if ctx.machine_id else '-')],
-        ['/etc/shadow geaendert',    (f'{ctx.shadow_mtime}   [TSK istat auf /etc/shadow, {_pp_lbl}] '
-                                      f'— letzte Passwort-/Benutzeraenderung'
-                                      if ctx.shadow_mtime else '-')],
-        ['Image-Format',             ctx.file_type],
-        ['Image-Groesse',            f'{ctx.file_size_gb:.2f} GB'],
-    ]
-    if getattr(ctx, 'sha1', ''):
-        kv3.append(['SHA1 (E01-eingebettet)', ctx.sha1])
-    if ctx.sha256:
-        kv3.append(['SHA256', ctx.sha256])
-    kv3 += [
-        ['MD5',                      ctx.md5 or '-'],
-        ['Virtualisierung',          primary_profile.get('virtualization', '-')],
-    ]
-    story.append(_kv_table(kv3, W, _rl_color))
-    story.append(_spacer(4))
 
-    # Non-Standard Services — forensisch relevante Persistenz-Hinweise
-    _svc_s7       = primary_profile.get('services', {})
-    _non_std_s7   = _svc_s7.get('non_standard', [])
-    _enabled_s7   = _svc_s7.get('enabled', [])
-    story.append(_h2('Aktivierte Services'))
-    story.append(_spacer(2))
-    if _enabled_s7:
-        story.append(_body(
-            f'Aktivierte systemd-Services ({len(_enabled_s7)} gesamt): '
-            f'{", ".join(_enabled_s7[:12])}'
-            + (f' (+{len(_enabled_s7) - 12} weitere)' if len(_enabled_s7) > 12 else '')
-        ))
+    # ── Fall-Modus: ein Profil-Block je Image ─────────────────────────────
+    _evi_sp = getattr(ctx, 'evidence_items', []) or []
+    if getattr(ctx, 'combined_case', False) and _evi_sp:
+        for ev in _evi_sp:
+            story.append(_h2(f"Image: {ev.get('name', '-')}"))
+            story.append(_spacer(2))
+            pps = ev.get('partition_profiles') or [{}]
+            pp  = next((p for p in pps if p.get('is_primary')), pps[0] if pps else {})
+            _lbl = f"Partition {pp.get('partition_index','?')} (offset {pp.get('offset','?')})"
+            rows = [
+                ['OS-Name',     ev.get('os_name') or '-'],
+                ['OS-Familie',  ev.get('os_family') or '-'],
+                ['OS-Quelle',   pp.get('os_source', '') or 'target-query'],
+                ['Kernel',      ev.get('kernel_version') or '-'],
+                ['Hostname',    ev.get('hostname') or '-'],
+                ['Zeitzone',    ev.get('timezone_display') or ev.get('timezone') or '-'],
+                ['Machine-ID',  (f"{ev.get('machine_id')}   [/etc/machine-id, {_lbl}]"
+                                 if ev.get('machine_id') else '-')],
+                ['/etc/shadow geaendert',
+                 (f"{ev.get('shadow_mtime')}   [TSK istat, {_lbl}] — letzte Passwort-/Benutzeraenderung"
+                  if ev.get('shadow_mtime') else '-')],
+                ['Partitionen', str(len(ev.get('partition_layout') or []))],
+            ]
+            story.append(_kv_table(rows, W, _rl_color))
+            story.append(_spacer(5))
+        story.append(PageBreak())
     else:
-        story.append(_body('Keine aktivierten Services erkannt (ggf. OpenRC-System).'))
-    story.append(_spacer(2))
-    if _non_std_s7:
-        ns_str = ', '.join(_non_std_s7[:15])
-        if len(_non_std_s7) > 15:
-            ns_str += f' (+{len(_non_std_s7) - 15} weitere)'
-        story.append(_body(
-            f'⚠ {len(_non_std_s7)} Nicht-Standard-Service(s) erkannt '
-            f'(nicht in OS-Whitelist): {ns_str}. '
-            f'Diese Dienste koennen auf Persistenz, Backdoors oder installierte '
-            f'Drittanbieter-Software hinweisen und sind forensisch zu pruefen.'
-        ))
-    else:
-        story.append(_body(
-            'Alle aktivierten Services entsprechen dem erwarteten Standard-Set '
-            'der erkannten OS-Familie. Es wurden keine abweichenden Dienste festgestellt.'
-        ))
-    story.append(PageBreak())
+        loaded_k_s7      = getattr(ctx, 'loaded_kernel_from_logs', '') or '-'
+        all_kernels_s7   = getattr(ctx, 'all_kernel_versions', [])
+        # Provenienz-Label der primaeren Partition (Review-Punkt #7:
+        # jeder Wert mit nachpruefbarer Quelle — Datei, Methode, Partition)
+        _pp_idx = primary_profile.get('partition_index', '?')
+        _pp_off = primary_profile.get('offset', '?')
+        _pp_lbl = f'Partition {_pp_idx} (offset {_pp_off})'
+        _os_src = primary_profile.get('os_source', '')
+        kv3 = [
+            ['OS-Familie',               ctx.os_family or '-'],
+            ['OS-Name',                  ctx.os_name or '-'],
+            ['OS-Erkennungsquelle',      _os_src or 'target-query (ganzes Image)'],
+            ['Kernel (target-query)',    ctx.kernel_version or '-'],
+            ['Kernel (geladen, Logs)',   loaded_k_s7],
+            ['Alle installierten Kernel', ', '.join(all_kernels_s7) or '-'],
+            ['Hostname',                 ctx.hostname or '-'],
+            ['Zeitzone',                 getattr(ctx, 'timezone_display', None) or ctx.timezone or '-'],
+            ['Machine-ID',               (f'{ctx.machine_id}   [/etc/machine-id via TSK icat, {_pp_lbl}]'
+                                          if ctx.machine_id else '-')],
+            ['/etc/shadow geaendert',    (f'{ctx.shadow_mtime}   [TSK istat auf /etc/shadow, {_pp_lbl}] '
+                                          f'— letzte Passwort-/Benutzeraenderung'
+                                          if ctx.shadow_mtime else '-')],
+            ['Image-Format',             ctx.file_type],
+            ['Image-Groesse',            f'{ctx.file_size_gb:.2f} GB'],
+        ]
+        if getattr(ctx, 'sha1', ''):
+            kv3.append(['SHA1 (E01-eingebettet)', ctx.sha1])
+        if ctx.sha256:
+            kv3.append(['SHA256', ctx.sha256])
+        kv3 += [
+            ['MD5',                      ctx.md5 or '-'],
+            ['Virtualisierung',          primary_profile.get('virtualization', '-')],
+        ]
+        story.append(_kv_table(kv3, W, _rl_color))
+        story.append(_spacer(4))
 
-    # ── Seite 8: Basic Checks — Log-Praesenz & Konsistenz ────────────────────
+        # Non-Standard Services — forensisch relevante Persistenz-Hinweise
+        _svc_s7       = primary_profile.get('services', {})
+        _non_std_s7   = _svc_s7.get('non_standard', [])
+        _enabled_s7   = _svc_s7.get('enabled', [])
+        story.append(_h2('Aktivierte Services'))
+        story.append(_spacer(2))
+        if _enabled_s7:
+            story.append(_body(
+                f'Aktivierte systemd-Services ({len(_enabled_s7)} gesamt): '
+                f'{", ".join(_enabled_s7[:12])}'
+                + (f' (+{len(_enabled_s7) - 12} weitere)' if len(_enabled_s7) > 12 else '')
+            ))
+        else:
+            story.append(_body('Keine aktivierten Services erkannt (ggf. OpenRC-System).'))
+        story.append(_spacer(2))
+        if _non_std_s7:
+            ns_str = ', '.join(_non_std_s7[:15])
+            if len(_non_std_s7) > 15:
+                ns_str += f' (+{len(_non_std_s7) - 15} weitere)'
+            story.append(_body(
+                f'⚠ {len(_non_std_s7)} Nicht-Standard-Service(s) erkannt '
+                f'(nicht in OS-Whitelist): {ns_str}. '
+                f'Diese Dienste koennen auf Persistenz, Backdoors oder installierte '
+                f'Drittanbieter-Software hinweisen und sind forensisch zu pruefen.'
+            ))
+        else:
+            story.append(_body(
+                'Alle aktivierten Services entsprechen dem erwarteten Standard-Set '
+                'der erkannten OS-Familie. Es wurden keine abweichenden Dienste festgestellt.'
+            ))
+        story.append(PageBreak())
+
+        # ── Seite 8: Basic Checks — Log-Praesenz & Konsistenz ────────────────────
     story.append(_h1('Basic Checks — Log-Praesenz & Konsistenz'))
     story.append(_spacer(3))
     story.append(_body(
