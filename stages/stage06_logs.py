@@ -76,6 +76,27 @@ ALL_PARSERS = [
 _BATCH_SIZE = 1000
 
 
+def _split_case_rel(rel: str):
+    """Zerlegt einen case-relativen Extraktionspfad in seine Provenienz.
+
+    'webserver.E01/p2048/var/log/syslog' -> ('webserver.E01', '/var/log/syslog', 'p2048')
+    'p2048/var/log/syslog'               -> ('',              '/var/log/syslog', 'p2048')
+    'partition_2048/etc/passwd'          -> ('',              '/etc/passwd',     'partition_2048')
+    """
+    def _is_part(s: str) -> bool:
+        return s.startswith('partition_') or (s.startswith('p') and s[1:].isdigit())
+
+    segs = [s for s in rel.split('/') if s]
+    evidence = ''
+    if segs and not _is_part(segs[0]) and len(segs) > 1:
+        evidence, segs = segs[0], segs[1:]
+    part_token = ''
+    if segs and _is_part(segs[0]):
+        part_token, segs = segs[0], segs[1:]
+    orig = '/' + '/'.join(segs) if segs else ''
+    return evidence, orig, part_token
+
+
 def run(ctx: PipelineContext) -> PipelineContext:
     workers = ctx.workers
     log.info(f'Stage 6: Log-Parsing ({workers} Worker)')
@@ -101,7 +122,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
         def _prov_for(lf: Path) -> dict:
             """Provenienz einer extrahierten Datei: Originalpfad auf dem
-            Image, Partition, Extraktionsmethode (Review-Punkt #7)."""
+            Image, Evidence (Fall-Modus), Partition, Extraktionsmethode."""
             entry = manifest.get(str(lf))
             if entry and entry.get('orig_path'):
                 off  = entry.get('partition_offset', '?')
@@ -109,11 +130,12 @@ def run(ctx: PipelineContext) -> PipelineContext:
                 part = (f'Partition {idx} (offset {off})'
                         if idx is not None else f'offset {off}')
                 return {'orig_path':  entry['orig_path'],
+                        'evidence':   entry.get('evidence', ''),
                         'partition':  part,
                         'extraction': entry.get('method', 'tsk_icat')}
             if ctx.case_dir:
-                # log_artefakte/p<offset>/<pfad>  bzw.
-                # disk_artefakte/partition_<offset>/<pfad> (tsk_recover)
+                # log_artefakte/[<evidence>/]p<offset>/<pfad>  bzw.
+                # disk_artefakte/[<evidence>/]partition_<offset>/<pfad>
                 for sub, method in (('raw/log_artefakte',  'tsk_icat'),
                                     ('raw/disk_artefakte', 'tsk_recover')):
                     base = ctx.case_dir / sub
@@ -121,15 +143,14 @@ def run(ctx: PipelineContext) -> PipelineContext:
                         rel = lf.relative_to(base).as_posix()
                     except ValueError:
                         continue
-                    first, _, rest = rel.partition('/')
-                    if rest and (first.startswith('p') or first.startswith('partition_')):
-                        off = first.removeprefix('partition_').removeprefix('p')
-                        return {'orig_path': '/' + rest,
-                                'partition': f'offset {off}',
-                                'extraction': method}
-                    return {'orig_path': '/' + rel, 'partition': '',
+                    evidence, orig, part_token = _split_case_rel(rel)
+                    off = part_token.removeprefix('partition_').removeprefix('p')
+                    return {'orig_path':  orig or '/' + rel,
+                            'evidence':   evidence,
+                            'partition':  f'offset {off}' if off else '',
                             'extraction': method}
-            return {'orig_path': '', 'partition': '', 'extraction': 'logs_dir'}
+            return {'orig_path': '', 'evidence': '', 'partition': '',
+                    'extraction': 'logs_dir'}
 
         system_tz   = ctx.timezone or 'UTC'
         max_read_mb = getattr(ctx, 'max_read_mb', 50)
@@ -238,7 +259,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
     evtx_files = _find_evtx_files(ctx)
     if evtx_files:
         log.info(f'Stage 4.3: Hayabusa — {len(evtx_files)} EVTX-Datei(en) gefunden')
-        hayabusa_events = _run_hayabusa(evtx_files)
+        hayabusa_events = _run_hayabusa(evtx_files, ctx.case_dir)
         if hayabusa_events:
             with EventStore(db_path) as store:
                 store.insert_events(hayabusa_events)
@@ -302,6 +323,7 @@ def route_and_parse(log_file: Path, prov: dict = None,
         e.parser_name = chosen.name
         e.source_file = str(log_file)
         e.orig_path   = orig_path
+        e.evidence    = prov.get('evidence', '')
         e.partition   = prov.get('partition', '')
         e.extraction  = prov.get('extraction', '')
     return chosen.name, events
@@ -332,7 +354,21 @@ _SEVERITY_MAP = {
 }
 
 
-def _run_hayabusa(evtx_files: List[Path]) -> List[ForensicEvent]:
+def _evidence_from_case_path(f: Path, case_dir) -> str:
+    """Evidence-Label aus einem Pfad unter raw/*_artefakte ableiten."""
+    if not case_dir:
+        return ''
+    for sub in ('raw/log_artefakte', 'raw/disk_artefakte'):
+        try:
+            rel = f.relative_to(Path(case_dir) / sub).as_posix()
+        except ValueError:
+            continue
+        ev, _, _ = _split_case_rel(rel)
+        return ev
+    return ''
+
+
+def _run_hayabusa(evtx_files: List[Path], case_dir=None) -> List[ForensicEvent]:
     cfg_path = Path(__file__).parent.parent / 'config.yaml'
     try:
         with open(cfg_path) as f:
@@ -360,7 +396,13 @@ def _run_hayabusa(evtx_files: List[Path]) -> List[ForensicEvent]:
             if result.returncode not in (0, 1):
                 log.warning(f'  Hayabusa Fehler bei {evtx_file.name}: {result.stderr[:100]}')
                 continue
-            events.extend(_parse_hayabusa_csv(result.stdout, evtx_file.name))
+            new_events = _parse_hayabusa_csv(result.stdout, evtx_file.name)
+            ev_label = _evidence_from_case_path(evtx_file, case_dir)
+            for e in new_events:
+                e.evidence    = ev_label
+                e.parser_name = 'hayabusa'
+                e.extraction  = 'hayabusa_sigma'
+            events.extend(new_events)
         except FileNotFoundError:
             log.warning(f'  Hayabusa Binary nicht gefunden: {binary}')
             break
@@ -424,9 +466,9 @@ def _find_log_files(ctx: PipelineContext) -> List[Path]:
                 if not f.is_file():
                     continue
                 rel = f.relative_to(disk_artefakte).as_posix().lower()
-                # fuehrenden Partitionsordner (partition_<offset>/) abschneiden
-                first, _, rest = rel.partition('/')
-                rel_path = rest if first.startswith('partition_') and rest else rel
+                # [<evidence>/]partition_<offset>/ abschneiden -> Originalpfad
+                _ev, orig, _pt = _split_case_rel(rel)
+                rel_path = orig.lstrip('/') if orig else rel
                 if (any(rel_path.startswith(pre) for pre in LOG_PATH_PREFIXES)
                         or any(kw in Path(rel_path).name for kw in LOG_NAME_KEYWORDS)):
                     log_files.append(f)
