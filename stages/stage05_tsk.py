@@ -100,7 +100,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
         else:
             log.warning(f'  Unbekanntes Dateisystem: {fs_type} — übersprungen')
             ctx.tsk_partitions.append({
-                'offset': offset, 'fs_type': fs_type, 'status': 'übersprungen', 'files': 0
+                'offset': offset, 'fs_type': fs_type, 'status': 'übersprungen', 'files': 0,
+                'image': str(ctx.disk_image_path), 'evidence': ctx.evidence_label,
             })
             continue
 
@@ -113,13 +114,16 @@ def run(ctx: PipelineContext) -> PipelineContext:
             'offset': offset, 'fs_type': fs_type,
             'status': 'analysiert', 'files': len(part_result),
             'deleted': deleted,
+            'image': str(ctx.disk_image_path), 'evidence': ctx.evidence_label,
         })
 
         if (fs_type in FS_TYPES or fs_type == 'xfs') and part_result and ctx.case_dir:
             log_dir = ctx.case_dir / 'raw' / 'log_artefakte'
+            if ctx.evidence_label:                      # Fall-Modus: pro Image trennen
+                log_dir = log_dir / ctx.evidence_label
             n, orig_paths, manifest_part = _extract_log_files(
                 ctx.disk_image_path, offset, part_result, log_dir, ctx.workers,
-                part_index=part.get('index'))
+                part_index=part.get('index'), evidence=ctx.evidence_label)
             total_log_extracted += n
             ctx.tsk_extracted_filenames.extend(orig_paths)
             ctx.extraction_manifest.update(manifest_part)
@@ -129,6 +133,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
     ctx.tsk_log_files_extracted = total_log_extracted
 
     out_dir = ctx.case_dir / 'raw' / 'disk_artefakte' if ctx.case_dir else Path('/tmp/tsk_out')
+    if ctx.evidence_label:
+        out_dir = out_dir / ctx.evidence_label
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Wiederherstellung gelöschter Dateien — PRO PARTITION mit Offset.
@@ -179,15 +185,22 @@ def run(ctx: PipelineContext) -> PipelineContext:
 
 
 def run_mactime_after_stage6(ctx: PipelineContext) -> PipelineContext:
-    """Wird nach Stage 6 aufgerufen — events.db existiert dann bereits."""
+    """Wird nach Stage 6 aufgerufen — events.db existiert dann bereits.
+
+    Fall-Modus: jede Partition traegt ihr Quell-Image ('image'/'evidence') —
+    MACtime laeuft damit korrekt pro Image statt nur auf dem letzten."""
     if ctx.skip_mactime or not ctx.disk_image_path or not ctx.events_db_path:
         return ctx
     for part in ctx.tsk_partitions:
         if part['status'] == 'analysiert':
+            img = Path(part.get('image') or ctx.disk_image_path)
+            ev  = part.get('evidence', '')
+            sorter_dir = ctx.case_dir / 'raw' / 'sorter_output'
+            if ev:
+                sorter_dir = sorter_dir / ev
             _generate_mactime_streaming(
-                ctx.disk_image_path, part['offset'], ctx.events_db_path, ctx)
-            _run_sorter(ctx.disk_image_path, part['offset'],
-                        ctx.case_dir / 'raw' / 'sorter_output', ctx)
+                img, part['offset'], ctx.events_db_path, ctx, evidence=ev)
+            _run_sorter(img, part['offset'], sorter_dir, ctx)
     return ctx
 
 
@@ -289,7 +302,7 @@ def _icat_extract(args: Tuple) -> bool:
 
 def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str],
                        log_dir: Path, workers: int = 2,
-                       part_index=None) -> Tuple[int, List[str], dict]:
+                       part_index=None, evidence: str = '') -> Tuple[int, List[str], dict]:
     """Extrahiert log-relevante Dateien einer Partition via icat.
 
     Zielstruktur: log_dir/p<offset>/<originalpfad>
@@ -370,6 +383,7 @@ def _extract_log_files(image_path: Path, offset: int, fls_entries: List[str],
                 progress.set_postfix({'extrahiert': extracted})
             manifest[str(out_file)] = {
                 'orig_path':        orig_path,
+                'evidence':         evidence,
                 'partition_offset': offset,
                 'partition_index':  part_index,
                 'inode':            inode,
@@ -397,7 +411,7 @@ def _analyse_xfs(image_path: Path, offset: int) -> List[str]:
 
 
 def _generate_mactime_streaming(image_path: Path, offset: int,
-                                db_path: Path, ctx) -> None:
+                                db_path: Path, ctx, evidence: str = '') -> None:
     """Streamt MACtime via mactime-Tool direkt in DuckDB — kein RAM-Problem."""
     import re
     from datetime import datetime, timezone
@@ -473,6 +487,11 @@ def _generate_mactime_streaming(image_path: Path, offset: int,
                     message    = f'[{macb}] {filename} ({size} bytes)',
                     file_path  = filename,
                     severity   = severity,
+                    evidence   = evidence,
+                    orig_path  = filename,
+                    partition  = f'offset {offset}',
+                    parser_name = 'mactime',
+                    extraction  = 'tsk_fls_mactime',
                 ))
                 count += 1
 
