@@ -104,11 +104,13 @@ def main():
     parser.add_argument('--debug',             action='store_true', help='Debug-Logging aktivieren')
     parser.add_argument('--workers',           type=int, default=2,
                         help='Anzahl paralleler Worker für Stage 6 + Stage 5 (Standard: 2)')
-    parser.add_argument('--case-mode', choices=['ask', 'select', 'batch'],
+    parser.add_argument('--case-mode',
+                        choices=['ask', 'select', 'batch', 'combined'],
                         default='ask',
                         help='Verhalten bei Ordner mit MEHREREN Images: '
-                             'ask=interaktiv fragen | select=Auswahlmenue | '
-                             'batch=alle nacheinander als getrennte Faelle')
+                             'ask=interaktiv fragen | select=einzeln auswaehlen | '
+                             'batch=alle als getrennte Faelle | '
+                             'combined=alle als EIN Fall (gemeinsamer Report)')
     parser.add_argument('--max-read-mb',       type=int, default=50,
                         help='Max. MB pro Log-Datei in Stage 6 (entpackt). '
                              '0 = unbegrenzt. Faustregel RAM-Bedarf: '
@@ -130,7 +132,10 @@ def main():
     batch_images: list = []
     if args.image and Path(args.image).is_dir():
         result = _resolve_folder_input(Path(args.image), args.case_mode)
-        if isinstance(result, list):
+        if isinstance(result, dict) and result.get('combined'):
+            # Fall-Modus: alle Images -> EIN gemeinsamer Report
+            return _run_case_pipeline(args, result['images'], output_dir)
+        elif isinstance(result, list):
             batch_images = result
         else:
             args.image = str(result)
@@ -168,6 +173,106 @@ def main():
         sys.exit(1)
 
     return _run_pipeline(args, image_path, output_dir)
+
+
+# Per-Image-Felder, die in den Snapshot eines Beweisstuecks gehoeren
+_EVIDENCE_SNAPSHOT_FIELDS = (
+    'file_type', 'file_size_gb', 'md5', 'sha1', 'sha256', 'hash_source',
+    'os_name', 'os_family', 'kernel_version', 'hostname', 'machine_id',
+    'shadow_mtime', 'timezone', 'timezone_display',
+    'partition_layout', 'partition_profiles', 'analysis_partitions',
+    'basic_checks', 'basic_check_anomalies', 'ip_addresses',
+)
+
+
+def _run_case_pipeline(args, images: list, output_dir: Path) -> int:
+    """Fall-Modus: mehrere Images -> EIN gemeinsamer Report.
+
+    Stage 1-5 + 3.5 laufen PRO Image (eigene Hashes, CoC-Eintrag,
+    Partitionen, Profil, Extraktion nach raw/*/<evidence>/). Stage 6-14
+    laufen EINMAL ueber die gemeinsame events.db -> eine Timeline,
+    Cross-Host-Korrelation, ein Report mit Systemprofil je Image.
+    """
+    import copy
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ctx = PipelineContext(
+        ram_dump_path   = Path(args.ram)  if args.ram  else None,
+        logs_dir_path   = Path(args.logs) if args.logs else None,
+        output_dir      = output_dir,
+        workers         = args.workers,
+        skip_bulk_extractor = args.no_bulk_extractor,
+        skip_mactime        = args.no_mactime,
+        interactive_mode    = (args.mode == 'manual'),
+        yara_mode           = args.yara,
+        max_read_mb         = args.max_read_mb,
+        combined_case       = True,
+    )
+
+    print()
+    print(f'  ╔══════════════════════════════════════════════════════════════╗')
+    print(f'  ║  FALL-MODUS: {len(images)} Images werden als EIN Fall analysiert'.ljust(67) + '║')
+    print(f'  ╚══════════════════════════════════════════════════════════════╝')
+
+    ui = PipelineUI(image_name=f'Fall ({len(images)} Images)')
+    ui.start()
+    try:
+        # ── Phase 1: Stage 1-5 + 3.5 pro Image ───────────────────────────
+        for i, img in enumerate(images, 1):
+            label = img.name
+            print()
+            print(f'  ━━━ Image {i}/{len(images)}: {label} — Erfassung & Extraktion ━━━')
+            ctx.disk_image_path = img
+            ctx.evidence_label  = label
+            # per-Image-Akkumulator zuruecksetzen (Basic Checks sauber je Image)
+            ctx.tsk_extracted_filenames = []
+
+            ctx = run_stage(stage01_detection.run,        ctx, 'stage_01', ui)
+            ui.show_stage01_detail(ctx)
+            ctx = run_stage(stage02_partition_layout.run, ctx, 'stage_02', ui)
+            ui.show_stage02_partition_detail(ctx)
+            ctx = run_stage(stage03_profiling.run,        ctx, 'stage_03', ui)
+            ui.show_stage03_detail(ctx)
+            ctx = run_stage(stage05_tsk.run,              ctx, 'stage_05', ui)
+            ui.show_stage05_detail(ctx)
+            ctx = run_stage(stage035_basic_checks.run,    ctx, 'stage_03_5', ui)
+            ui.show_stage035_detail(ctx)
+
+            # Snapshot dieses Beweisstuecks (tiefe Kopie der Per-Image-Felder)
+            snap = {'name': label, 'path': str(img)}
+            for f in _EVIDENCE_SNAPSHOT_FIELDS:
+                snap[f] = copy.deepcopy(getattr(ctx, f, None))
+            ctx.evidence_items.append(snap)
+
+        # ── Phase 2: Stage 6-14 EINMAL ueber alle Images ─────────────────
+        print()
+        print(f'  ━━━ Gemeinsame Analyse aller {len(images)} Images ━━━')
+        ctx = run_stage(stage06_logs.run,          ctx, 'stage_06', ui)
+        ui.show_parser_detail(ctx)
+        ctx = stage05_tsk.run_mactime_after_stage6(ctx)
+        ui.show_mactime_sorter_detail(ctx)
+        ctx = run_stage(stage07_ioc.run,           ctx, 'stage_07', ui)
+        ui.show_stage07_detail(ctx)
+        ctx = run_stage(stage08_normalize.run,     ctx, 'stage_08', ui)
+        ui.show_stage08_detail(ctx)
+        ctx = run_stage(stage09_antiforensics.run, ctx, 'stage_09', ui)
+        ui.show_stage09_detail(ctx)
+        ctx = run_stage(stage_timeline_analysis.run, ctx, 'stage_8.5', ui)
+        ui.show_stage85_detail(ctx)
+        ctx = run_stage(stage13_quality.run,       ctx, 'stage_13', ui)
+        ui.show_stage13_detail(ctx)
+        try:
+            save_ctx_snapshot(ctx, ctx.case_dir)
+        except Exception as e:
+            log.warning(f'  Snapshot fehlgeschlagen: {e} — Stage 14 laeuft trotzdem')
+        ctx = run_stage(stage14_export.run,        ctx, 'stage_14', ui)
+        ui.show_stage14_detail(ctx)
+    finally:
+        ui.stop()
+
+    ui.show_summary(ctx)
+    print()
+    print(f'  ✅  Fall-Report erstellt: {ctx.case_dir}')
+    return 0 if not ctx.stage_errors else 1
 
 
 def _run_pipeline(args, image_path: Path, output_dir: Path) -> int:
@@ -353,22 +458,31 @@ def _resolve_folder_input(folder: Path, case_mode: str = 'ask'):
         zeile = f'  ║   [{i}] {e["path"].name}  ({e["size_gb"]:.1f} GB{seg})'
         print(zeile.ljust(67) + '║')
     print('  ╠══════════════════════════════════════════════════════════════╣')
-    print('  ║  [Nummer] dieses Image analysieren                           ║')
-    print('  ║  [a]      ALLE nacheinander als getrennte Faelle             ║')
+    print('  ╠══════════════════════════════════════════════════════════════╣')
+    print('  ║  Gehoeren diese Images zum SELBEN Fall?                       ║')
+    print('  ║  [j]      JA — gemeinsamer Durchlauf, EIN Report (Fall-Modus) ║')
+    print('  ║  [Nummer] NEIN — nur dieses eine Image analysieren           ║')
+    print('  ║  [a]      NEIN — alle nacheinander als getrennte Faelle      ║')
     print('  ║  [q]      abbrechen                                          ║')
     print('  ╚══════════════════════════════════════════════════════════════╝')
     print()
 
+    if case_mode == 'combined':
+        return {'combined': True, 'images': [e['path'] for e in images]}
     if case_mode == 'select':
         prompt = f'  Image auswaehlen [1-{len(images)}]: '
+    elif case_mode == 'batch':
+        return [e['path'] for e in images]
     else:
-        prompt = f'  Auswahl [1-{len(images)} / a / q]: '
+        prompt = f'  Auswahl [j / 1-{len(images)} / a / q]: '
 
     while True:
         raw = input(prompt).strip().lower()
         if raw == 'q':
             sys.exit(0)
-        if raw == 'a' and case_mode != 'select':
+        if raw == 'j':
+            return {'combined': True, 'images': [e['path'] for e in images]}
+        if raw == 'a':
             return [e['path'] for e in images]
         if raw.isdigit() and 1 <= int(raw) <= len(images):
             return images[int(raw) - 1]['path']

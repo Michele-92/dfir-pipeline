@@ -63,20 +63,29 @@ def run(ctx: PipelineContext) -> PipelineContext:
         ctx.hash_source = 'Berechnet'
     log.info(f'Hash-Quelle: {ctx.hash_source}')
 
-    # Ausgabe-Ordnerstruktur
-    ctx.case_dir = _create_case_dir(ctx.output_dir)
-    log.info(f'Case-Verzeichnis: {ctx.case_dir}')
+    # Ausgabe-Ordnerstruktur — im Fall-Modus teilen sich alle Images
+    # EINEN case_dir (wird nur beim ersten Image angelegt)
+    if ctx.case_dir is None:
+        ctx.case_dir = _create_case_dir(ctx.output_dir)
+        log.info(f'Case-Verzeichnis: {ctx.case_dir}')
 
-    # Chain of Custody starten
-    ctx.coc = ChainOfCustody(
-        file_name  = path.name,
-        sha256     = ctx.sha256,
-        sha1       = ctx.sha1,
-        md5        = ctx.md5,
-        size_gb    = ctx.file_size_gb,
-        start_time = datetime.utcnow(),
-    )
-    ctx.coc.add_entry('stage_01', 'Dateierkennung abgeschlossen')
+    # Chain of Custody — im Fall-Modus EINE CoC fuer den ganzen Fall,
+    # aber Hashes pro Image getrennt (forensisch zwingend)
+    if ctx.coc is None:
+        ctx.coc = ChainOfCustody(
+            file_name  = path.name,
+            sha256     = ctx.sha256,
+            sha1       = ctx.sha1,
+            md5        = ctx.md5,
+            size_gb    = ctx.file_size_gb,
+            start_time = datetime.utcnow(),
+        )
+    _ev = ctx.evidence_label or path.name
+    ctx.coc.add_evidence(_ev, md5=ctx.md5, sha1=ctx.sha1, sha256=ctx.sha256,
+                         size_gb=ctx.file_size_gb, hash_source=ctx.hash_source)
+    ctx.coc.add_entry('stage_01',
+                      f'[{_ev}] Dateierkennung abgeschlossen' if ctx.evidence_label
+                      else 'Dateierkennung abgeschlossen')
     return ctx
 
 

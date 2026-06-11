@@ -73,3 +73,44 @@ def test_interaktiv_a_ergibt_batch(monkeypatch):
     monkeypatch.setattr('builtins.input', lambda prompt='': 'a')
     r = _resolve_folder_input(d, 'ask')
     assert isinstance(r, list) and len(r) == 2
+
+
+# ── Fall-Modus (Option 1): mehrere Images, ein gemeinsamer Report ────────
+
+def test_case_mode_combined_liefert_dict():
+    d = _folder([('jumpbox.E01', 100), ('webserver.E01', 200)])
+    r = _resolve_folder_input(d, 'combined')
+    assert isinstance(r, dict) and r['combined'] is True
+    assert len(r['images']) == 2
+
+
+def test_interaktiv_j_ergibt_fall_modus(monkeypatch):
+    d = _folder([('jumpbox.E01', 100), ('webserver.E01', 200)])
+    monkeypatch.setattr('builtins.input', lambda prompt='': 'j')
+    r = _resolve_folder_input(d, 'ask')
+    assert isinstance(r, dict) and r['combined'] is True
+
+
+def test_stage01_teilt_casedir_und_coc_im_fallmodus(monkeypatch, tmp_path):
+    import stages.stage01_detection as s1
+    from models.pipeline_context import PipelineContext
+    monkeypatch.setattr(s1, 'read_e01_hashes', lambda p: ('', ''))
+    monkeypatch.setattr(s1, 'read_e01_media_size', lambda p: 0)
+    monkeypatch.setattr(s1, 'detect_format', lambda m: 'DD')
+    monkeypatch.setattr(s1, 'detect_format_by_extension', lambda p: 'DD')
+    monkeypatch.setattr(s1, 'compute_both', lambda p: ('sha_' + p.name, 'md5_' + p.name))
+
+    img1 = tmp_path / 'jumpbox.E01';   img1.write_bytes(b'A' * 50)
+    img2 = tmp_path / 'webserver.E01'; img2.write_bytes(b'B' * 50)
+    ctx = PipelineContext(output_dir=tmp_path / 'out', combined_case=True)
+
+    ctx.disk_image_path = img1; ctx.evidence_label = 'jumpbox.E01'
+    ctx = s1.run(ctx)
+    cd, coc = ctx.case_dir, ctx.coc
+    ctx.disk_image_path = img2; ctx.evidence_label = 'webserver.E01'
+    ctx = s1.run(ctx)
+
+    assert ctx.case_dir is cd      # geteilter Case-Ordner
+    assert ctx.coc is coc          # eine gemeinsame CoC
+    assert set(ctx.coc.evidence_hashes) == {'jumpbox.E01', 'webserver.E01'}
+    assert ctx.coc.evidence_hashes['jumpbox.E01']['md5'] == 'md5_jumpbox.E01'
