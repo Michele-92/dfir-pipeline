@@ -104,6 +104,11 @@ def main():
     parser.add_argument('--debug',             action='store_true', help='Debug-Logging aktivieren')
     parser.add_argument('--workers',           type=int, default=2,
                         help='Anzahl paralleler Worker für Stage 6 + Stage 5 (Standard: 2)')
+    parser.add_argument('--case-mode', choices=['ask', 'select', 'batch'],
+                        default='ask',
+                        help='Verhalten bei Ordner mit MEHREREN Images: '
+                             'ask=interaktiv fragen | select=Auswahlmenue | '
+                             'batch=alle nacheinander als getrennte Faelle')
     parser.add_argument('--max-read-mb',       type=int, default=50,
                         help='Max. MB pro Log-Datei in Stage 6 (entpackt). '
                              '0 = unbegrenzt. Faustregel RAM-Bedarf: '
@@ -118,6 +123,30 @@ def main():
         logging.getLogger().setLevel(logging.DEBUG)
 
     output_dir = Path(args.output_dir)
+
+    # ── Ordner-Eingabe: Disk-Images erkennen (Multi-Image-Modus) ─────────────
+    # Datei direkt / Ordner mit 1 Image (auch segmentiert) -> laeuft normal.
+    # Nur bei einem Ordner mit MEHREREN Images erscheint die Auswahl.
+    batch_images: list = []
+    if args.image and Path(args.image).is_dir():
+        result = _resolve_folder_input(Path(args.image), args.case_mode)
+        if isinstance(result, list):
+            batch_images = result
+        else:
+            args.image = str(result)
+
+    # ── Batch: alle Images nacheinander als GETRENNTE Faelle ────────────────
+    if batch_images:
+        print()
+        print(f'  Batch-Modus: {len(batch_images)} Images werden nacheinander analysiert.')
+        rc_total = 0
+        for i, img in enumerate(batch_images, 1):
+            print()
+            print(f'  ━━━ Image {i}/{len(batch_images)}: {img.name} ━━━')
+            rc_total = max(rc_total, _run_pipeline(args, img, output_dir))
+        print()
+        print(f'  Batch abgeschlossen — {len(batch_images)} Images analysiert.')
+        return rc_total
 
     # ── Startmodus — immer fragen ─────────────────────────────────────────────
     choice = _show_startup_menu(output_dir, args.image)
@@ -138,6 +167,11 @@ def main():
         print(f'[Fehler] Image nicht gefunden: {image_path}')
         sys.exit(1)
 
+    return _run_pipeline(args, image_path, output_dir)
+
+
+def _run_pipeline(args, image_path: Path, output_dir: Path) -> int:
+    """Fuehrt die komplette Pipeline fuer EIN Image aus."""
     ctx = PipelineContext(
         disk_image_path = image_path,
         ram_dump_path   = Path(args.ram)  if args.ram  else None,
@@ -223,6 +257,122 @@ def main():
     ui.show_summary(ctx)
 
     return 0 if not ctx.stage_errors else 1
+
+
+# ── MULTI-IMAGE-ERKENNUNG (Ordner-Eingabe) ──────────────────────────────────
+
+import re as _re
+
+# Von der Pipeline unterstuetzte Image-Formate (vgl. utils/file_detection.py)
+IMAGE_EXTENSIONS = {
+    '.e01', '.ex01',                    # EnCase / EWF
+    '.dd', '.raw', '.img',              # Raw
+    '.vmdk',                            # VMware
+    '.vhd', '.vhdx',                    # Hyper-V
+    '.qcow2', '.qcow',                  # QEMU
+    '.aff',                             # Advanced Forensic Format
+}
+
+# EWF-Folgesegmente: .E02-.E99, danach .EAA-.EZZ (auch .Ex..-Schreibweise).
+# WICHTIG: Segmente sind KEINE eigenen Images — sie gehoeren zum .E01.
+_EWF_SEGMENT = _re.compile(r'^\.e(x?)(?!01$)([0-9a-z]{2})$', _re.IGNORECASE)
+
+
+def _scan_image_folder(folder: Path) -> list:
+    """Findet Disk-Images in einem Ordner.
+
+    EWF-Segmentdateien (disk.E02, disk.E03, ...) werden dem zugehoerigen
+    disk.E01 zugeordnet (ein Beweisstueck, in Teilen gesichert) — eine
+    Segmentdatei zaehlt nur, wenn das passende .E01 daneben liegt.
+
+    Rueckgabe: [{'path': Path, 'size_gb': float, 'segments': int}, ...]
+    """
+    primaries: dict = {}     # stem(lower) -> Eintrag
+    seg_candidates: list = []
+
+    for f in sorted(folder.iterdir()):
+        if not f.is_file():
+            continue
+        suf = f.suffix.lower()
+        if suf in ('.e01', '.ex01'):
+            primaries[f.stem.lower()] = {
+                'path': f, 'size_bytes': f.stat().st_size, 'segments': 1}
+        elif _EWF_SEGMENT.match(suf):
+            seg_candidates.append(f)
+        elif suf in IMAGE_EXTENSIONS:
+            primaries[f.name.lower()] = {
+                'path': f, 'size_bytes': f.stat().st_size, 'segments': 1}
+
+    # Segmente nur zaehlen, wenn das passende .E01 existiert
+    for f in seg_candidates:
+        entry = primaries.get(f.stem.lower())
+        if entry is not None and entry['path'].suffix.lower() in ('.e01', '.ex01'):
+            entry['segments']   += 1
+            entry['size_bytes'] += f.stat().st_size
+
+    images = sorted(primaries.values(), key=lambda e: e['path'].name.lower())
+    for e in images:
+        e['size_gb'] = e.pop('size_bytes') / (1024 ** 3)
+    return images
+
+
+def _resolve_folder_input(folder: Path, case_mode: str = 'ask'):
+    """Loest eine Ordner-Eingabe auf.
+
+    1 Image (auch segmentiert)  -> Path (laeuft durch wie Datei-Angabe)
+    mehrere Images + case_mode:
+        'select' / interaktiv Nummer -> Path
+        'batch'  / interaktiv [a]    -> list[Path] (getrennte Faelle)
+    0 Images -> Abbruch mit Fehlermeldung.
+    """
+    images = _scan_image_folder(folder)
+
+    if not images:
+        print()
+        print(f'  [Fehler] Keine Disk-Images in unterstuetzten Formaten gefunden: {folder}')
+        print(f'  Unterstuetzt: {", ".join(sorted(IMAGE_EXTENSIONS))}')
+        sys.exit(1)
+
+    if len(images) == 1:
+        e = images[0]
+        seg = f' ({e["segments"]} Segmente)' if e['segments'] > 1 else ''
+        print(f'  Ordner-Eingabe: 1 Image erkannt — {e["path"].name}'
+              f' ({e["size_gb"]:.1f} GB){seg} — starte direkt.')
+        return e['path']
+
+    # ── Mehrere Images: Auswahl noetig ───────────────────────────────────
+    if case_mode == 'batch':
+        return [e['path'] for e in images]
+
+    print()
+    print('  ╔══════════════════════════════════════════════════════════════╗')
+    print(f'  ║  Im angegebenen Pfad wurden {len(images)} Disk-Images erkannt:'.ljust(67) + '║')
+    print('  ╠══════════════════════════════════════════════════════════════╣')
+    for i, e in enumerate(images, 1):
+        seg = f', {e["segments"]} Segmente' if e['segments'] > 1 else ''
+        zeile = f'  ║   [{i}] {e["path"].name}  ({e["size_gb"]:.1f} GB{seg})'
+        print(zeile.ljust(67) + '║')
+    print('  ╠══════════════════════════════════════════════════════════════╣')
+    print('  ║  [Nummer] dieses Image analysieren                           ║')
+    print('  ║  [a]      ALLE nacheinander als getrennte Faelle             ║')
+    print('  ║  [q]      abbrechen                                          ║')
+    print('  ╚══════════════════════════════════════════════════════════════╝')
+    print()
+
+    if case_mode == 'select':
+        prompt = f'  Image auswaehlen [1-{len(images)}]: '
+    else:
+        prompt = f'  Auswahl [1-{len(images)} / a / q]: '
+
+    while True:
+        raw = input(prompt).strip().lower()
+        if raw == 'q':
+            sys.exit(0)
+        if raw == 'a' and case_mode != 'select':
+            return [e['path'] for e in images]
+        if raw.isdigit() and 1 <= int(raw) <= len(images):
+            return images[int(raw) - 1]['path']
+        print('  Bitte gueltige Eingabe.')
 
 
 # ── STARTUP-MENÜ (immer angezeigt) ───────────────────────────────────────────

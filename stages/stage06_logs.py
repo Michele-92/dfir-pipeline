@@ -83,7 +83,10 @@ def run(ctx: PipelineContext) -> PipelineContext:
     log.info(f'  {len(log_files)} Log-Dateien gefunden')
     log.info(f'  Parsing mit {workers} parallelen Worker-Prozessen — schreibe Events in DuckDB...')
 
-    db_path = ctx.output_dir / 'events.db'
+    # events.db gehoert in den CASE-Ordner (nicht output-Root):
+    # mehrere Laeufe/Batch ueberschrieben sich sonst gegenseitig, und der
+    # Reexport (utils/reexport.py) erwartet sie ohnehin im Case-Verzeichnis.
+    db_path = (ctx.case_dir or ctx.output_dir) / 'events.db'
     if db_path.exists():
         db_path.unlink()
 
