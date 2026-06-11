@@ -444,14 +444,19 @@ class PipelineUI:
                 p_title  = f'[bold green]⭐ Primäre Partition  [{idx}]  {fs}  ·  {size:,.0f} MB[/bold green]'
                 p_border = 'green'
             else:
-                role     = profile.get('role', '')
-                role_str = f'  ·  {role}' if role else ''
-                hint     = '  (Boot-Partition — kein OS erwartet)' if role == 'BOOT' else ''
-                p_title  = f'[cyan]Partition  [{idx}]  {fs}  ·  {size:,.0f} MB{role_str}{hint}[/cyan]'
+                # Titelzeile bleibt wie gewohnt — die Rollen-Info kommt als
+                # Subtitle in den UNTEREN Panel-Rahmen (Wunsch von Miche)
+                p_title  = f'[cyan]Partition  [{idx}]  {fs}  ·  {size:,.0f} MB[/cyan]'
                 p_border = 'dim'
 
+            role       = profile.get('role', '')
+            p_subtitle = None
+            if not is_primary and role:
+                hint = '  (Boot-Partition — kein OS erwartet)' if role == 'BOOT' else ''
+                p_subtitle = f'[dim]{role}{hint}[/dim]'
+
             tbl = _build_profile_table(profile, is_primary)
-            inner_panels.append(Panel(tbl, title=p_title,
+            inner_panels.append(Panel(tbl, title=p_title, subtitle=p_subtitle,
                                       border_style=p_border, padding=(0, 1)))
 
         # Spacer zwischen den inneren Panels
