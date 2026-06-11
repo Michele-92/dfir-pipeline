@@ -54,6 +54,12 @@ def run(ctx: PipelineContext) -> PipelineContext:
     _write_reboot_sessions_excel(ctx, case_dir)
     _write_filtered_filesystem_timeline_excel(ctx, case_dir)
     _generate_report_pdf(ctx, case_dir)
+    # NEU: moderner Bericht als ZUSAETZLICHE Datei (report.pdf bleibt bestehen)
+    try:
+        from stages.report_modern import build_modern_report
+        build_modern_report(ctx, case_dir)
+    except Exception as _e:
+        log.warning(f'  Moderner Bericht uebersprungen: {_e}')
     _generate_coc_pdf(ctx, case_dir)
     _generate_critical_report(ctx, case_dir)
     _upload_timesketch(ctx, case_dir)
