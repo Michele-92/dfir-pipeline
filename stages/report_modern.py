@@ -253,14 +253,23 @@ def _build(ctx, case_dir: Path) -> None:
         top=sorted(findings,key=lambda f:order.get((f.severity or '').upper(),5))[:6]
         for i,f in enumerate(top,1):
             ts=f.anomaly_time.strftime('%Y-%m-%d %H:%M UTC') if getattr(f,'anomaly_time',None) else '—'
+            # Image/Quelle aus dem Stage-6-Kontext des Befunds ableiten (falls vorhanden)
+            _img=''; _ctxsrc=''
+            for ce in (getattr(f,'evidence',[]) or []):
+                if isinstance(ce,dict):
+                    _img=_img or ce.get('evidence','') or ce.get('image','')
+                    _ctxsrc=_ctxsrc or ce.get('orig_path','') or ce.get('source','')
+            brows=[['Merkmal','Wert'],
+                   ['Betroffene Datei',f.file or '—'],
+                   ['Zeitpunkt (UTC)',ts]]
+            if _img:    brows.append(['Image',_img])
+            if _ctxsrc: brows.append(['Quelle (Kontext)',_ctxsrc])
+            brows.append(['Regel / Methode',f.rule or '—'])
             S+=[finding_card(f'B-{i:02d}',esc(f.rule or 'Befund'),(f.severity or 'INFO'),
                 f'<b>Erkenntnis</b> — {esc(f.description or "")}',
-                tbl([['Merkmal','Wert'],
-                     ['Betroffene Datei',f.file or '—'],
-                     ['Zeitpunkt',ts],
-                     ['Regel',f.rule or '—']],[42*mm,W-42*mm-11]),
-                'Stage 8.5 Timeline-Analyse · Kontext siehe forensic_findings.json',
-                '<b>forensic_findings.xlsx</b> · alle Befunde mit Evidence-Kontext'),
+                tbl(brows,[42*mm,W-42*mm-11]),
+                'Stage 8.5 Timeline-Analyse (events.db / mactime) · betroffene Datei im Image nachpruefbar',
+                '<b>forensic_findings.xlsx</b> · alle Befunde mit vollstaendigem Evidence-Kontext'),
                 Spacer(1,6*mm)]
     else:
         S+=[Paragraph('Keine forensischen Befunde durch die Timeline-Analyse erkannt.',S_BODY),Spacer(1,4*mm)]
@@ -268,13 +277,16 @@ def _build(ctx, case_dir: Path) -> None:
     if afhits:
         af_order={'critical':0,'high':1,'medium':2}
         afs=sorted(afhits,key=lambda h:af_order.get((h.get('severity') or '').lower(),3))[:6]
-        ar=[['Typ','Datei','Detail','Schwere']]
+        ar=[['Typ','Betroffene Datei','Nachweis-Quelle','Detail','Schwere']]
         for h in afs:
-            ar.append([h.get('type','?'),(h.get('file','') or '')[:34],
-                       (h.get('details','') or '')[:60],(h.get('severity','info') or 'info').upper()])
+            ar.append([h.get('type','?'),(h.get('file','') or '—')[:30],
+                       h.get('source','—'),(h.get('details','') or '')[:46],
+                       (h.get('severity','info') or 'info').upper()])
         S+=[h2('Anti-Forensik-Indikatoren — Auszug'),Spacer(1,2.5*mm),
-            tbl(ar,[30*mm,38*mm,W-30*mm-38*mm-24*mm-11,24*mm],sev_col=3),Spacer(1,2.5*mm),
-            beilage(f'Alle {len(afhits)} Anti-Forensik-Treffer inkl. YARA: <b>antiforensics.json</b>')]
+            tbl(ar,[26*mm,34*mm,30*mm,W-26*mm-34*mm-30*mm-22*mm-11,22*mm],sev_col=4),Spacer(1,2.5*mm),
+            prov('Spalte „Betroffene Datei" + „Nachweis-Quelle" (Pruefmethode: z.B. fls_symlink_scan, '
+                 'rc_local, grub_config, yara) — im Image direkt nachpruefbar.'),Spacer(1,2*mm),
+            beilage(f'Alle {len(afhits)} Anti-Forensik-Treffer inkl. YARA-Details: <b>antiforensics.json</b>')]
     S+=[PageBreak()]
 
     # ════ 05 TIMELINE ════
@@ -310,13 +322,19 @@ def _build(ctx, case_dir: Path) -> None:
     if iocs:
         by={}
         for i in iocs: by.setdefault(i.type,[]).append(i)
-        ir=[['Typ','Wert','Kontext','Image' if combined else 'Quelle']]
+        if combined:
+            ir=[['Typ','Wert','Quelle (Parser/Datei)','Image']]
+        else:
+            ir=[['Typ','Wert','Quelle (Parser/Datei)','Kontext']]
         for typ in sorted(by,key=lambda k:-len(by[k]))[:8]:
             it=by[typ][0]
-            last=(getattr(it,'evidence','') if combined else it.source) or '—'
-            ir.append([typ,(it.value or '')[:46],(it.context or '')[:34],str(last)[:18]])
+            quelle=(it.source or '—')
+            last=(getattr(it,'evidence','') or '—') if combined else (it.context or '—')
+            ir.append([typ,(it.value or '')[:42],str(quelle)[:24],str(last)[:22]])
         npriv=len(by.get('ip_private',[]))
-        S+=[tbl(ir,[20*mm,58*mm,W-20*mm-58*mm-26*mm,26*mm]),Spacer(1,2.5*mm),
+        S+=[tbl(ir,[18*mm,52*mm,32*mm,W-18*mm-52*mm-32*mm],),Spacer(1,2.5*mm),
+            prov('Spalte „Quelle" nennt den Parser bzw. die Herkunft (z.B. auth, '
+                 'bash_history, bulk_extractor) — jeder IOC ist bis zur Ursprungsdatei rueckverfolgbar.'),Spacer(1,2*mm),
             beilage(f'Alle {len(iocs)} IOCs'
                     +(f' — {npriv} ip_private separat' if npriv else '')+': <b>iocs.json</b> / <b>iocs.xlsx</b>')]
     else:
