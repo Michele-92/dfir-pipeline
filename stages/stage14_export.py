@@ -1,6 +1,7 @@
 import csv
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -233,6 +234,55 @@ _SUCCESS_LOGIN_TYPES = {
     'ssh_login_success', 'auth_success', 'pam_session',
     'user_login', 'console_login', 'su_session',
 }
+
+# Login-Indikatoren im Nachrichtentext (journald/syslog: event_type ist dort
+# generisch 'system', der Login steckt nur in der Message).
+_LOGIN_MSG_RE = [
+    re.compile(r'Accepted (?:password|publickey|keyboard-interactive\S*) '
+               r'for (?P<user>\S+) from (?P<ip>[\d.]+|[0-9a-fA-F:]+)'),
+    re.compile(r'New session \d+ of user (?P<user>\S+)'),
+    re.compile(r'session opened for user (?P<user>\S+)'),
+    re.compile(r'login: (?P<user>\S+)'),
+]
+
+
+def _detect_login(event):
+    """Erkennt erfolgreiche Logins ueber ALLE Quellen (auth, journald, wtmp,
+    wtmpdb). Gibt (user, ip, methode) zurueck oder None.
+
+    Behebt: vorher wurden nur auth-SSH-Logins erfasst (fester event_type-Filter)
+    — wtmp/wtmpdb-Logins und Journal-Sessions fielen durch, der Quellen-Abgleich
+    lief leer. Jetzt:
+      - auth/ssh:  explizite Login-Event-Typen (SSH ueber Passwort/Key)
+      - wtmp/utmp: user_process = interaktive Session (Remote ODER Konsole)
+      - wtmpdb:    *_login (Y2038-sicherer wtmp-Nachfolger)
+      - journald/syslog: Login per Nachrichten-Muster (inkl. Konsole/CLI)
+    """
+    et   = (event.event_type or '').lower()
+    src  = (event.source or '').lower()
+    user = (event.user or '').strip()
+    ip   = (event.ip or '').strip()
+
+    if et in _SUCCESS_LOGIN_TYPES:
+        return (user, ip, 'SSH-Schluessel' if 'publickey' in (event.message or '')
+                else 'SSH-Passwort' if 'ssh' in et else 'PAM/Auth')
+    if src in ('wtmp', 'utmp') and et == 'user_process':
+        return (user, ip, 'Remote (SSH/Netzwerk)' if ip else 'Konsole/lokal')
+    if src == 'wtmpdb' and et.endswith('_login') and not any(
+            x in et for x in ('boot', 'run_level', 'empty')):
+        return (user, ip, 'Remote (SSH/Netzwerk)' if ip else 'Konsole/lokal')
+    if src in ('journald', 'syslog') or 'messages' in src:
+        msg = event.message or ''
+        for pat in _LOGIN_MSG_RE:
+            m = pat.search(msg)
+            if m:
+                gd = m.groupdict()
+                u  = user or gd.get('user', '') or ''
+                i  = ip or gd.get('ip', '') or ''
+                meth = ('SSH (Journal)' if 'Accepted' in msg
+                        else 'Session (Journal)')
+                return (u, i, meth)
+    return None
 
 # ── Filesystem-Timeline-Konstanten ────────────────────────────────────────────
 _INTERESTING_PREFIXES = (
@@ -987,10 +1037,11 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
 
     # ── Aggregation: ip → Statistik ───────────────────────────────────────────
     def _src_cat(source: str) -> str:
-        """Kategorisiert Log-Quelle in auth / journal / wtmp."""
+        """Kategorisiert die Quelle fuer den Abgleich auth/journal/wtmp/wtmpdb."""
         s = (source or '').lower()
-        if 'auth' in s:                          return 'auth'
+        if 'wtmpdb' in s:                        return 'wtmpdb'
         if 'wtmp' in s or 'utmp' in s or 'lastlog' in s: return 'wtmp'
+        if 'auth' in s:                          return 'auth'
         if 'journal' in s or 'systemd' in s:     return 'journal'
         if 'syslog' in s or 'messages' in s:     return 'journal'
         return 'other'
@@ -1000,32 +1051,34 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
 
     with EventStore(ctx.events_db_path) as store:
         for event in store.iter_events():
-            if event.event_type not in _SUCCESS_LOGIN_TYPES:
+            login = _detect_login(event)
+            if login is None:
                 continue
-            ip = (event.ip or '').strip()
-            if not ip:
-                continue
-            ts   = event.timestamp
-            user = (event.user or '').strip()
-            if ip not in ip_data:
-                ip_data[ip] = {
+            user, ip, method = login
+            # Lokale/Konsolen-Logins (ohne IP) unter Sammelschluessel fuehren,
+            # damit auch Nicht-SSH-Anmeldungen sichtbar sind (Betreuer-Wunsch)
+            key = ip if ip else '(lokal/Konsole)'
+            ts  = event.timestamp
+            if key not in ip_data:
+                ip_data[key] = {
                     'first': ts, 'last': ts, 'count': 0,
-                    'users': set(), 'sources': set(),
-                    'source_cats': set(),
-                    'ip_type': _ip_type(ip),
+                    'users': set(), 'sources': set(), 'source_cats': set(),
+                    'methods': set(),
+                    'ip_type': _ip_type(key) if ip else 'Lokal',
                 }
-            d = ip_data[ip]
+            d = ip_data[key]
             if ts < d['first']: d['first'] = ts
             if ts > d['last']:  d['last']  = ts
             d['count'] += 1
             if user: d['users'].add(user)
             d['sources'].add(event.source or '')
             d['source_cats'].add(_src_cat(event.source or ''))
+            d['methods'].add(method)
             detail_rows.append({
-                'ip': ip, 'ts': ts, 'user': user,
+                'ip': key, 'ts': ts, 'user': user, 'method': method,
                 'event_type': event.event_type,
                 'source': event.source or '',
-                'message': event.message[:200],
+                'message': (event.message or '')[:200],
             })
 
     if not ip_data:
@@ -1038,12 +1091,14 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
     extern_ips  = [(ip, d) for ip, d in sorted_ips if d['ip_type'] == 'Extern']
     detail_rows.sort(key=lambda r: (r['ip'], r['ts']))
 
-    HDR  = ['IP', 'Typ', 'Login_Anzahl', 'Erster_Login_UTC', 'Letzter_Login_UTC',
-            'Session_Dauer', 'Benutzer', 'Log-Quellen', 'In_AuthLog', 'In_Journal', 'In_Wtmp']
-    WID  = [16, 10, 14, 22, 22, 16, 35, 30, 12, 12, 12]
+    HDR  = ['IP', 'Typ', 'Login_Anzahl', 'Login_Methoden', 'Erster_Login_UTC',
+            'Letzter_Login_UTC', 'Session_Dauer', 'Benutzer', 'Log-Quellen',
+            'In_AuthLog', 'In_Journal', 'In_Wtmp', 'In_Wtmpdb']
+    WID  = [16, 10, 13, 28, 21, 21, 14, 28, 28, 11, 11, 10, 11]
     LC   = get_column_letter(len(HDR))
-    HDR3 = ['IP', 'Typ', 'Timestamp_UTC', 'Benutzer', 'Event_Type', 'Quelle', 'Nachricht']
-    WID3 = [16, 10, 22, 18, 24, 22, 60]
+    HDR3 = ['IP', 'Typ', 'Timestamp_UTC', 'Benutzer', 'Login_Methode',
+            'Event_Type', 'Quelle', 'Nachricht']
+    WID3 = [16, 10, 22, 16, 22, 22, 20, 58]
     LC3  = get_column_letter(len(HDR3))
 
     def _hdr_row(ws, row, headers, widths):
@@ -1073,6 +1128,7 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
                 if d['first'] != d['last'] else '< 1 Min'
             scats  = d.get('source_cats', set())
             vals   = [ip, ipt, d['count'],
+                      ', '.join(sorted(d.get('methods', set()))) or '—',
                       d['first'].strftime('%Y-%m-%d %H:%M:%S'),
                       d['last'].strftime('%Y-%m-%d %H:%M:%S'),
                       dur,
@@ -1080,13 +1136,14 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
                       ', '.join(sorted(d['sources'])) or '—',
                       '✓' if 'auth'    in scats else '✗',
                       '✓' if 'journal' in scats else '✗',
-                      '✓' if 'wtmp'    in scats else '✗']
+                      '✓' if 'wtmp'    in scats else '✗',
+                      '✓' if 'wtmpdb'  in scats else '✗']
             for col, val in enumerate(vals, 1):
                 c = ws.cell(ri, col, val)
                 c.fill = rbg; c.border = _BDR
                 c.font = _font(bold=(col == 1 and ipt == 'Extern' and has_root), size=9)
-                c.alignment = _align(h='center' if col in (2, 3, 6) else 'left',
-                                     wrap=(col >= 7))
+                c.alignment = _align(h='center' if col in (2, 3) else 'left',
+                                     wrap=(col >= 8))
             ws.row_dimensions[ri].height = 18
 
     wb = Workbook()
@@ -1133,11 +1190,12 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
             else (F_W if ri % 2 == 0 else F_ALT)
         for col, val in enumerate([row['ip'], ipt,
                                     row['ts'].strftime('%Y-%m-%d %H:%M:%S'),
-                                    row['user'] or '—', row['event_type'],
+                                    row['user'] or '—', row.get('method', '—'),
+                                    row['event_type'],
                                     row['source'], row['message']], 1):
             c = ws3.cell(ri, col, val)
             c.fill = rbg; c.border = _BDR; c.font = _font(size=9)
-            c.alignment = _align(h='left', wrap=(col == 7))
+            c.alignment = _align(h='left', wrap=(col == 8))
         ws3.row_dimensions[ri].height = 18
     if len(detail_rows) > MAX_DETAIL:
         nr = MAX_DETAIL + 3
@@ -1147,9 +1205,42 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
                       f'abgeschnitten (Limit: {MAX_DETAIL})')
         nc.font = _font(size=9, color='5F5E5A'); nc.alignment = _align(h='center')
 
+    # Sheet 4: Legende & Quellen-Abgleich (Betreuer-Wunsch: Provenienz + Limits)
+    ws4 = wb.create_sheet('Legende')
+    ws4.sheet_view.showGridLines = False
+    ws4.column_dimensions['A'].width = 24
+    ws4.column_dimensions['B'].width = 112
+    _banner(ws4, 1, 'LEGENDE — Login-Quellen, Abgleich & Limitationen', 'B')
+    _leg = [
+        ('Datenquellen', 'Erfolgreiche Logins werden aus VIER Quellen zusammengefuehrt: '
+            'auth.log/secure (SSH), systemd-Journal, wtmp und wtmpdb. '
+            'Jede Zeile der Login-Detail-Mappe nennt in „Quelle" die konkrete Herkunft.'),
+        ('In_AuthLog', '✓ = dieser Login ist in /var/log/auth.log (bzw. secure) belegt.'),
+        ('In_Journal', '✓ = im systemd-Journal belegt (/var/log/journal/). '
+            'Journale enthalten oft MEHR Logins als auth.log.'),
+        ('In_Wtmp', '✓ = in /var/log/wtmp belegt (auch Konsolen-/lokale Logins).'),
+        ('In_Wtmpdb', '✓ = in /var/lib/wtmpdb/wtmp.db belegt (moderner wtmp-Nachfolger).'),
+        ('Abgleich', 'Stimmen die ✓/✗ ueber mehrere Quellen NICHT ueberein, kann das auf '
+            'geloeschte/manipulierte Logs hindeuten (z.B. Login in wtmp, aber NICHT in '
+            'auth.log). Genau dieser Quervergleich ist der forensische Mehrwert.'),
+        ('Login_Methoden', 'SSH-Passwort, SSH-Schluessel, Remote (Netzwerk), '
+            'Konsole/lokal, Session (Journal). Es werden NICHT nur SSH-Logins erfasst.'),
+        ('(lokal/Konsole)', 'Sammelzeile fuer interaktive Logins OHNE Netzwerk-IP '
+            '(direkte Konsole/tty, lokale Anmeldung).'),
+        ('Limitationen', '(1) Journal-Logins werden ueber Nachrichtenmuster erkannt — '
+            'untypische Formate koennen entgehen. (2) wtmp speichert den Remote-Host nur '
+            'wenn vorhanden; lokale Logins erscheinen ohne IP. (3) Geloeschte Journal-/'
+            'wtmp-Eintraege koennen nicht rekonstruiert werden. (4) Zeitzone aller '
+            'Timestamps: UTC (in Stage 08 normalisiert).'),
+    ]
+    for ri, (k, v) in enumerate(_leg, 3):
+        ws4.cell(ri, 1, k).font = _font(bold=True, size=9)
+        c = ws4.cell(ri, 2, v); c.font = _font(size=9); c.alignment = _align(wrap=True)
+        ws4.row_dimensions[ri].height = max(28, 14 * (len(v) // 95 + 1))
+
     out = case_dir / 'ip_sessions.xlsx'
     wb.save(str(out))
-    log.info(f'  ip_sessions.xlsx → {out}  ({len(ip_data)} IPs, {len(detail_rows)} Login-Events)')
+    log.info(f'  ip_sessions.xlsx → {out}  ({len(ip_data)} IPs/Quellen, {len(detail_rows)} Login-Events)')
 
 
 # ── Reboot-Session-Analyse Excel ─────────────────────────────────────────────
