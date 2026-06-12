@@ -240,10 +240,37 @@ _SUCCESS_LOGIN_TYPES = {
 _LOGIN_MSG_RE = [
     re.compile(r'Accepted (?:password|publickey|keyboard-interactive\S*) '
                r'for (?P<user>\S+) from (?P<ip>[\d.]+|[0-9a-fA-F:]+)'),
-    re.compile(r'New session \d+ of user (?P<user>\S+)'),
-    re.compile(r'session opened for user (?P<user>\S+)'),
-    re.compile(r'login: (?P<user>\S+)'),
+    # Benutzername ohne '(uid=...)'-Anhang und ohne Satzzeichen erfassen
+    re.compile(r'New session \d+ of user (?P<user>[^\s(.]+)'),
+    re.compile(r'session opened for user (?P<user>[^\s(.]+)'),
+    re.compile(r'login: (?P<user>[^\s(.]+)'),
 ]
+
+
+# Fallback: typischer Standardpfad je Parser-Quelle (nur wenn das Event
+# keinen echten orig_path aus der Extraktion traegt, z.B. Alt-Snapshots)
+_FALLBACK_SRC_PATHS = {
+    'auth':     '/var/log/auth.log',
+    'journald': '/var/log/journal/',
+    'syslog':   '/var/log/syslog',
+    'messages': '/var/log/messages',
+    'wtmp':     '/var/log/wtmp',
+    'utmp':     '/var/run/utmp',
+    'wtmpdb':   '/var/lib/wtmpdb/wtmp.db',
+    'lastlog':  '/var/log/lastlog',
+}
+
+
+def _source_path(event) -> str:
+    """Nachpruefbarer Quellpfad eines Events: echter Originalpfad aus der
+    Extraktion (Provenienz-Feld), im Fall-Modus mit [Image]-Praefix;
+    Fallback: typischer Standardpfad (mit *-Markierung), sonst Parser-Name."""
+    op = (getattr(event, 'orig_path', '') or '').strip()
+    if not op:
+        fb = _FALLBACK_SRC_PATHS.get((event.source or '').lower().strip())
+        op = f'{fb} *' if fb else (event.source or '—')   # * = Standardpfad, nicht verifiziert
+    ev = (getattr(event, 'evidence', '') or '').strip()
+    return f'[{ev}] {op}' if ev else op
 
 
 def _detect_login(event):
@@ -1077,7 +1104,7 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
             detail_rows.append({
                 'ip': key, 'ts': ts, 'user': user, 'method': method,
                 'event_type': event.event_type,
-                'source': event.source or '',
+                'source': _source_path(event),      # nachpruefbarer PFAD statt Parser-Name
                 'message': (event.message or '')[:200],
             })
 
@@ -1097,8 +1124,8 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
     WID  = [16, 10, 13, 28, 21, 21, 14, 28, 28, 11, 11, 10, 11]
     LC   = get_column_letter(len(HDR))
     HDR3 = ['IP', 'Typ', 'Timestamp_UTC', 'Benutzer', 'Login_Methode',
-            'Event_Type', 'Quelle', 'Nachricht']
-    WID3 = [16, 10, 22, 16, 22, 22, 20, 58]
+            'Event_Type', 'Quelle (Pfad auf dem Image)', 'Nachricht']
+    WID3 = [16, 9, 21, 14, 20, 20, 36, 50]
     LC3  = get_column_letter(len(HDR3))
 
     def _hdr_row(ws, row, headers, widths):
@@ -1227,6 +1254,10 @@ def _write_ip_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
             'Konsole/lokal, Session (Journal). Es werden NICHT nur SSH-Logins erfasst.'),
         ('(lokal/Konsole)', 'Sammelzeile fuer interaktive Logins OHNE Netzwerk-IP '
             '(direkte Konsole/tty, lokale Anmeldung).'),
+        ('Quelle (Pfad)', 'Login-Detail nennt den ORIGINALPFAD der Quelldatei auf dem '
+            'Image (aus dem Extraktions-Manifest) — direkt nachpruefbar, im Fall-Modus '
+            'mit [Image]-Praefix. Ein * markiert den typischen Standardpfad, falls der '
+            'exakte Pfad nicht aus der Extraktion belegt ist.'),
         ('Limitationen', '(1) Journal-Logins werden ueber Nachrichtenmuster erkannt — '
             'untypische Formate koennen entgehen. (2) wtmp speichert den Remote-Host nur '
             'wenn vorhanden; lokale Logins erscheinen ohne IP. (3) Geloeschte Journal-/'
