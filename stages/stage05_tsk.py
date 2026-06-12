@@ -418,10 +418,15 @@ def _generate_mactime_streaming(image_path: Path, offset: int,
     from models.event import ForensicEvent
     from utils.event_store import EventStore
 
-    # mactime Space-Format: date   size macb mode uid gid inode   filename
-    RE = re.compile(
-        r'^(?P<date>\w{3} \w{3}\s+\d+ \d{4} \d{2}:\d{2}:\d{2})\s+'
-        r'(?P<size>\d+)\s+'
+    # mactime Space-Format: "Wkd Mon  D YYYY HH:MM:SS  size macb mode uid gid inode filename"
+    # WICHTIG: mactime gibt das Datum nur in der ERSTEN Zeile einer Zeitgruppe
+    # aus. Teilen sich mehrere Eintraege (auch m/a/c/b DERSELBEN Datei) einen
+    # Zeitpunkt, ist das Datumsfeld der Folgezeilen LEER. Solche Zeilen wurden
+    # frueher verworfen -> z.B. erschien nur atime, nie mtime/ctime/btime.
+    # Fix: Datum optional, leere Datumszeilen erben den letzten Zeitstempel.
+    DATE_RE = re.compile(r'^(?P<date>\w{3} \w{3}\s+\d+ \d{4} \d{2}:\d{2}:\d{2})\s+(?P<rest>.*)$')
+    ROW_RE  = re.compile(
+        r'^(?P<size>\d+)\s+'
         r'(?P<macb>[macb\.]+)\s+'
         r'(?P<mode>\S+)\s+'
         r'(?P<uid>\d+)\s+'
@@ -457,19 +462,29 @@ def _generate_mactime_streaming(image_path: Path, offset: int,
         count = 0
 
         with EventStore(db_path) as store:
+            last_ts = None   # Zeitstempel der laufenden Zeitgruppe (carry-forward)
             for line in mt.stdout.splitlines():
                 if not line or line.startswith('#'):
                     continue
-                m = RE.match(line)
+                # Datum vorhanden? -> last_ts aktualisieren, Rest abtrennen.
+                dm = DATE_RE.match(line)
+                if dm:
+                    try:
+                        last_ts = datetime.strptime(
+                            dm.group('date').strip(), '%a %b %d %Y %H:%M:%S'
+                        ).replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        last_ts = None
+                    row = dm.group('rest')
+                else:
+                    # Folgezeile mit leerem Datum -> Zeitstempel der Gruppe erben
+                    row = line.strip()
+                if last_ts is None:
+                    continue
+                m = ROW_RE.match(row.strip())
                 if not m:
                     continue
-                try:
-                    ts = datetime.strptime(
-                        m.group('date').strip(), '%a %b %d %Y %H:%M:%S'
-                    ).replace(tzinfo=timezone.utc)
-                except ValueError:
-                    continue
-
+                ts       = last_ts
                 filename = m.group('filename').strip()
                 macb     = m.group('macb')
                 size     = m.group('size')
