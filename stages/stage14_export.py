@@ -45,6 +45,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
     _write_pipeline_report(ctx, case_dir)
     _write_autopsy_status(ctx, case_dir)
     _write_iocs_json(ctx, case_dir)
+    _write_iocs_excel(ctx, case_dir)
     _write_antiforensics_json(ctx, case_dir)
     _write_activity_csv(ctx, case_dir)
     _export_mactime_package(ctx, case_dir)
@@ -1524,6 +1525,104 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
         f'  reboot_sessions.xlsx → {out}  '
         f'({len(sessions)} Sessions, {sum(s["total"] for s in sessions)} Events gesamt)'
     )
+
+
+# ── IOC-Excel ────────────────────────────────────────────────────────────────
+
+def _write_iocs_excel(ctx: PipelineContext, case_dir: Path) -> None:
+    """Alle IOCs als Excel — iocs.xlsx.
+
+    Mappe 'IOCs':        oeffentliche Indikatoren (Typ-gefiltert via Autofilter)
+    Mappe 'ip_private':  private/reservierte IPs separat (Review-Fix #18)
+    Mappe 'Legende':     Spalten- und Typ-Erklaerung
+    Jede Zeile traegt ihre Quelle (Parser/Herkunft) + Kontext-Schnipsel.
+    """
+    if not ctx.iocs:
+        log.info('  iocs.xlsx: keine IOCs — übersprungen')
+        return
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        log.warning('openpyxl nicht installiert — iocs.xlsx übersprungen')
+        return
+
+    def _fill(h): return PatternFill(fill_type='solid', fgColor=h.lstrip('#'))
+    def _font(bold=False, color='000000', size=9):
+        return Font(name='Arial', bold=bold, color=color.lstrip('#'), size=size)
+    def _align(h='left', v='center', wrap=False):
+        return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
+    _side = Side(style='thin', color='C8D5E8')
+    _BDR  = Border(left=_side, right=_side, top=_side, bottom=_side)
+    F_BANNER = _fill('0D1B2A'); F_HEADER = _fill('1B3A5C')
+    F_W = _fill('FFFFFF'); F_ALT = _fill('F2F5F9')
+
+    HDR = ['Typ', 'Wert', 'Quelle (Parser/Herkunft)', 'Kontext']
+    WID = [16, 52, 24, 70]
+    LC  = get_column_letter(len(HDR))
+
+    pub  = [i for i in ctx.iocs if i.type != 'ip_private']
+    priv = [i for i in ctx.iocs if i.type == 'ip_private']
+
+    wb = Workbook()
+
+    def _sheet(ws, titel, daten):
+        ws.sheet_view.showGridLines = False
+        ws.merge_cells(f'A1:{LC}1')
+        b = ws.cell(1, 1, titel)
+        b.font = _font(bold=True, color='FFFFFF', size=12)
+        b.fill = F_BANNER; b.alignment = _align(h='center')
+        ws.row_dimensions[1].height = 24
+        for col, (h, w) in enumerate(zip(HDR, WID), 1):
+            c = ws.cell(2, col, h)
+            c.font = _font(bold=True, color='FFFFFF', size=10)
+            c.fill = F_HEADER; c.alignment = _align(h='center'); c.border = _BDR
+            ws.column_dimensions[get_column_letter(col)].width = w
+        ws.row_dimensions[2].height = 20
+        ws.freeze_panes = 'A3'
+        ws.auto_filter.ref = f'A2:{LC}{len(daten) + 2}'
+        for ri, ioc in enumerate(sorted(daten, key=lambda x: (x.type, x.value)), 3):
+            rbg = F_W if ri % 2 == 0 else F_ALT
+            for col, val in enumerate([ioc.type, ioc.value,
+                                       ioc.source or '—',
+                                       (ioc.context or '')[:200]], 1):
+                c = ws.cell(ri, col, val)
+                c.border = _BDR; c.fill = rbg
+                c.font = _font(size=9)
+                c.alignment = _align(wrap=(col == 4))
+
+    ws1 = wb.active; ws1.title = 'IOCs'
+    _sheet(ws1, f'INDIKATOREN (IOCs) — {len(pub)} Eintraege', pub)
+    if priv:
+        ws2 = wb.create_sheet('ip_private')
+        _sheet(ws2, f'PRIVATE / RESERVIERTE IPs — {len(priv)} Eintraege '
+                    f'(separat: verrauschen oeffentliche IOCs nicht, '
+                    f'Lateral Movement bleibt sichtbar)', priv)
+
+    ws3 = wb.create_sheet('Legende')
+    ws3.sheet_view.showGridLines = False
+    ws3.column_dimensions['A'].width = 26
+    ws3.column_dimensions['B'].width = 110
+    legende = [
+        ('Typ', 'IOC-Kategorie: ip, ip_private, ipv6, domain, url, hash_md5, '
+                'hash_sha1, hash_sha256, email, cve, registry_key'),
+        ('Wert', 'Der Indikator selbst — Hashes immer vollstaendig, keine Kuerzung.'),
+        ('Quelle (Parser/Herkunft)', 'Welcher Parser bzw. welches Werkzeug den IOC fand '
+                '(z.B. auth, bash_history, bulk_extractor). Rueckverfolgbar bis zur '
+                'Ursprungsdatei ueber die Timeline (orig_path).'),
+        ('Kontext', 'Textausschnitt rund um den Fund (±40 Zeichen).'),
+        ('Mappe ip_private', 'Private/reservierte IPs (RFC1918, Loopback) separat — '
+                'im LAN-Szenario relevant, verrauschen aber die oeffentlichen IOCs.'),
+    ]
+    for ri, (k, v) in enumerate(legende, 2):
+        ws3.cell(ri, 1, k).font = _font(bold=True, size=9)
+        c = ws3.cell(ri, 2, v); c.font = _font(size=9); c.alignment = _align(wrap=True)
+        ws3.row_dimensions[ri].height = 28
+
+    out = case_dir / 'iocs.xlsx'
+    wb.save(str(out))
+    log.info(f'  iocs.xlsx → {out}  ({len(pub)} IOCs, {len(priv)} ip_private)')
 
 
 # ── Gefilterte Filesystem-Timeline Excel ─────────────────────────────────────

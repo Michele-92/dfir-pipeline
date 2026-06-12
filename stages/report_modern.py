@@ -313,7 +313,8 @@ def _build(ctx, case_dir: Path) -> None:
         S+=[Spacer(1,2.5*mm)]
     else:
         S+=[Paragraph('Keine relevanten Timeline-Ereignisse (critical/high/medium).',S_BODY),Spacer(1,2.5*mm)]
-    S+=[beilage('Vollständige Timeline: <b>timeline.xlsx</b> + <b>activity_timeline.csv</b> · '
+    S+=[beilage('Dateisystem-Timeline: <b>filtered_filesystem_timeline.xlsx</b> · '
+                'Ereignisse: <b>activity_timeline.csv</b> · '
                 'Sitzungen: <b>reboot_sessions.xlsx</b> / <b>ip_sessions.xlsx</b> · interaktiv: Timesketch'),
         Spacer(1,8*mm)]
 
