@@ -94,6 +94,31 @@ class EventStore:
             for row in rows:
                 yield self._row_to_event(row)
 
+    def load_normalized(self, cap: int = 500_000):
+        """Laedt Events fuer ctx.normalized_events RAM-schonend.
+
+        OOM-Schutz (Stage 08 wurde bei vielen Events vom OOM-Killer beendet):
+        Der mactime/info-Bulk (4 Timestamps x JEDE Datei) wird NICHT in den
+        RAM materialisiert — er bleibt vollstaendig in events.db und wird von
+        Stage 8.5 sowie der filtered_filesystem_timeline.xlsx direkt von dort
+        gelesen. In den Speicher kommen nur die forensisch durchsuchten
+        Events (alles ausser mactime/info), hart gekappt bei `cap`.
+
+        Rueckgabe: (events_liste, gesamt_in_db, geladen_anzahl)
+        """
+        total = self._conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        rows = self._conn.execute(
+            "SELECT id,timestamp,source,event_type,message,username,"
+            "ip,process,file_path,severity,anomaly_score,mitre_tags,"
+            "evidence,orig_path,source_file,partition_label,parser_name,extraction "
+            "FROM events "
+            "WHERE NOT (source = 'mactime' AND severity = 'info') "
+            "ORDER BY timestamp LIMIT ?",
+            [cap],
+        ).fetchall()
+        events = [self._row_to_event(r) for r in rows]
+        return events, total, len(events)
+
     def get_all_sorted(self) -> List[ForensicEvent]:
         """Lädt alle Events als sortierte ForensicEvent-Liste (für ctx.normalized_events)."""
         rows = self._conn.execute(

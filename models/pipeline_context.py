@@ -40,6 +40,7 @@ class PipelineContext:
     # ── Performance ───────────────────────────────────────
     workers:             int  = 2
     max_read_mb:         int  = 50   # 0 = unbegrenzt (--max-read-mb)
+    max_events_in_ram:   int  = 500_000  # OOM-Schutz Stage 08 (Bulk bleibt in DB)
     skip_bulk_extractor: bool = False
     skip_mactime:        bool = False
 

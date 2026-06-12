@@ -16,12 +16,19 @@ def run(ctx: PipelineContext) -> PipelineContext:
     # nach UTC normalisiert (mit der Image-Zeitzone aus Stage 03). Die
     # fruehere zweite Konversion hier verschob UTC-Quellen (mactime, wtmp,
     # journald, audit, hayabusa) faelschlich um den Zeitzonen-Offset.
+    # RAM-schonend laden: Vollbestand bleibt in events.db (Stage 8.5 + die
+    # Filesystem-Timeline-Excel lesen ihn dort), in den Speicher kommen nur
+    # die durchsuchten Events ohne den mactime/info-Bulk (OOM-Schutz).
+    cap = max(100_000, getattr(ctx, 'max_events_in_ram', 500_000))
     with EventStore(ctx.events_db_path) as store:
         total = store.count()
         log.info(f'  Bereinige Pflichtfelder ({total:,} Events)...')
         store.cleanup_required_fields()
-        log.info(f'  Lade {total:,} Events in Speicher...')
-        ctx.normalized_events = store.get_all_sorted()
+        log.info(f'  Lade durchsuchbare Events in Speicher (Bulk bleibt in DB)...')
+        ctx.normalized_events, total_db, loaded = store.load_normalized(cap=cap)
+        if loaded < total_db:
+            log.info(f'  RAM-schonend: {loaded:,} von {total_db:,} Events geladen '
+                     f'(mactime/info-Bulk bleibt in events.db)')
 
     count = len(ctx.normalized_events)
 
