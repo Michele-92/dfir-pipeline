@@ -440,27 +440,143 @@ def _build(ctx, case_dir: Path) -> None:
     S+=h1('D','Anhang — Pipeline-Ausführungsprotokoll')
     S+=[Paragraph('Stage-Übersichten der Pipeline-Ausführung — inhaltlich identisch zu den '
                   'Terminal-Panels.',S_BODY),Spacer(1,5*mm)]
-    # D.x Partition-Layout je Image
+    # Helfer: Hashes je Image (Fall: coc.evidence_hashes, Einzel: ctx)
+    def _hash_src():
+        return str(getattr(ctx,'hash_source','') or '—')
+
+    # D.1 Stage 01 — Dateierkennung & Beweissicherung (je Image)
+    for e in evi:
+        d1=[['Merkmal','Wert'],
+            ['Format', str(e.get('file_type') or '—')],
+            ['Größe (logisch)', f"{e.get('file_size_gb') or 0:.1f} GB"],
+            ['Hash-Quelle', _hash_src()]]
+        S+=[KeepTogether([h2(f"Stage 01 — Dateierkennung · {e.get('name','Image')}"),Spacer(1,2*mm),
+            tbl(d1,[44*mm,W-44*mm]),Spacer(1,1.2*mm),
+            prov('Vollständige MD5/SHA1/SHA256 siehe Abschnitt 02 (Beweismittel & Integrität).')]),Spacer(1,5*mm)]
+
+    # D.2 Stage 02 — Partition-Layout (je Image)
     for e in evi:
         pl=e.get('partition_layout') or []
         if not pl: continue
-        S+=[h2(f"Partition-Layout — {e.get('name','Image')}"),Spacer(1,2.5*mm)]
+        S+=[h2(f"Stage 02 — Partition-Layout · {e.get('name','Image')}"),Spacer(1,2.5*mm)]
         pr=[['#','Offset','Dateisystem','Rolle','Tool','OS erkannt']]
         for p in pl:
             pr.append([str(p.get('index','?')),str(p.get('offset','?')),p.get('fs_type','?'),
                        p.get('role','?'),p.get('tool','?'),(p.get('os_name') or '—')])
         S+=[tbl(pr,[8*mm,22*mm,26*mm,26*mm,16*mm,W-98*mm],right={1}),Spacer(1,5*mm)]
-    # D Parser-Statistik
+
+    # D.3 Stage 03 — System-Profiling Details (je Image)
+    for e in evi:
+        pps=e.get('partition_profiles') or []
+        pp=next((p for p in pps if p.get('is_primary')),pps[0] if pps else {})
+        if not pp: continue
+        usage=pp.get('usage_period',{}) or {}
+        ssh=pp.get('ssh_config',{}) or {}
+        ips=pp.get('ip_addresses',[]) or []
+        d3=[['Merkmal','Wert'],
+            ['Installiert am', str(pp.get('install_time') or '—')],
+            ['Erste Aktivität', str(usage.get('first_activity') or '—')],
+            ['Letzte Aktivität', str(usage.get('last_activity') or '—')],
+            ['IP-Adressen', (', '.join(ips[:5]) if ips else '—')],
+            ['Virtualisierung', str(pp.get('virtualization') or '—')]]
+        if ssh:
+            d3.append(['SSH root-login', str(ssh.get('permit_root_login') or '—')])
+            d3.append(['SSH password-auth', str(ssh.get('password_auth') or '—')])
+        svc=pp.get('enabled_services',[]) or []
+        usr=pp.get('users',[]) or []
+        if svc: d3.append(['Aktive Dienste', str(len(svc))])
+        if usr: d3.append(['Benutzerkonten', str(len(usr))])
+        S+=[KeepTogether([h2(f"Stage 03 — System-Profil · {e.get('name','Image')}"),Spacer(1,2*mm),
+            tbl(d3,[44*mm,W-44*mm])]),Spacer(1,5*mm)]
+
+    # D.4 Stage 03.5 — Basic Checks (je Image)
+    for e in evi:
+        bc=e.get('basic_checks') or getattr(ctx,'basic_checks',[]) or []
+        if not bc: continue
+        d4=[['Service/Log','Erwartet','Gefunden','Status']]
+        for c in bc[:18]:
+            d4.append([str(c.get('service','?')),
+                       'Pflicht' if c.get('expected') else '—',
+                       'Ja' if c.get('found') else 'Nein',
+                       str(c.get('status','—'))])
+        S+=[KeepTogether([h2(f"Stage 03.5 — Basic Checks · {e.get('name','Image')}"),Spacer(1,2*mm),
+            tbl(d4,[W-24*mm-22*mm-46*mm,24*mm,22*mm,46*mm])]),Spacer(1,5*mm)]
+
+    # D.5 Stage 05 — TSK-Extraktion (gesamt)
+    d5=[['Merkmal','Wert'],
+        ['Log-Dateien extrahiert', f"{getattr(ctx,'tsk_log_files_extracted',0):,}".replace(',','.')],
+        ['Gelöschte Dateien gefunden', f"{getattr(ctx,'tsk_deleted_found',0):,}".replace(',','.')],
+        ['davon wiederhergestellt', f"{getattr(ctx,'tsk_deleted_recovered',0):,}".replace(',','.')]]
+    S+=[KeepTogether([h2('Stage 05 — TSK-Extraktion'),Spacer(1,2*mm),
+        tbl(d5,[64*mm,W-64*mm],right={1}),Spacer(1,1.2*mm),
+        prov('Vollständige Dateiliste mit Pfad, Partition, Inode und Hash: extraction_manifest.json')]),Spacer(1,5*mm)]
+
+    # D.6 Stage 06 — Parser-Statistik
     pstats=getattr(ctx,'parser_stats',{}) or {}
     if pstats:
-        S+=[h2('Log-Parsing — Events pro Parser'),Spacer(1,2.5*mm)]
+        S+=[h2('Stage 06 — Log-Parsing (Events pro Parser)'),Spacer(1,2.5*mm)]
         pr=[['Parser','Events']]
         for name,cnt in sorted(pstats.items(),key=lambda x:-x[1])[:18]:
             pr.append([name,f'{cnt:,}'.replace(',','.')])
         S+=[tbl(pr,[W-40*mm,40*mm],right={1}),Spacer(1,2.5*mm),
             prov(f'{getattr(ctx,"parsed_events",0):,} Events gesamt'.replace(',','.')
-                 +f' · Qualitaet: {ctx.stage_status.get("quality","—")}'
-                 +f' · Stage-Fehler: {len(getattr(ctx,"stage_errors",{}))}')]
+                 +f' · text_fallback kennzeichnet ungeparste Zeilen')]
+        S+=[Spacer(1,5*mm)]
+
+    # D.7 MACtime / Sorter
+    mac=getattr(ctx,'tsk_mactime_events',0)
+    if mac:
+        d7=[['Merkmal','Wert'],['MACtime-Einträge', f"{mac:,}".replace(',','.')]]
+        if getattr(ctx,'tsk_sorter_ran',False):
+            d7.append(['Sorter-Kategorien', str(len(getattr(ctx,'tsk_sorter_categories',{}) or {}))])
+        S+=[KeepTogether([h2('Stage 05/06 — MACtime & Sorter'),Spacer(1,2*mm),
+            tbl(d7,[64*mm,W-64*mm],right={1})]),Spacer(1,5*mm)]
+
+    # D.8 Stage 08 — Normalisierung / Zeitraum
+    d8=[['Merkmal','Wert'],
+        ['Events normalisiert', f"{len(nevents):,}".replace(',','.')],
+        ['Frühestes Event', str(getattr(ctx,'earliest_event','') or '—')],
+        ['Letztes Event', str(getattr(ctx,'latest_event','') or '—')]]
+    S+=[KeepTogether([h2('Stage 08 — Datennormalisierung (UTC)'),Spacer(1,2*mm),
+        tbl(d8,[44*mm,W-44*mm])]),Spacer(1,5*mm)]
+
+    # D.9 Stage 08.6 — Konsistenzprüfung (Event-Korroboration)
+    cc=getattr(ctx,'consistency_checks',[]) or []
+    if cc:
+        if combined:
+            d9=[['Image','Prüfung','Quelle (Pfad)','Befund']]
+            for c in cc[:14]:
+                d9.append([str(c.get('image','—')),str(c.get('check','?')),
+                           str(c.get('source_path','—')),str(c.get('detail',''))[:55]])
+            tdef=tbl(d9,[22*mm,28*mm,38*mm,W-22*mm-28*mm-38*mm])
+        else:
+            d9=[['Prüfung','Quelle (Pfad)','Befund']]
+            for c in cc[:14]:
+                d9.append([str(c.get('check','?')),str(c.get('source_path','—')),
+                           str(c.get('detail',''))[:60]])
+            tdef=tbl(d9,[34*mm,42*mm,W-34*mm-42*mm])
+        S+=[KeepTogether([h2('Stage 08.6 — Konsistenzprüfung (Event-Korroboration)'),Spacer(1,2*mm),
+            tdef,Spacer(1,1.2*mm),
+            prov(f'{getattr(ctx,"consistency_anomalies",0)} Anomalien — Log vorhanden aber 0 Events '
+                 'bzw. Log ohne Installations-Beleg. Quelle je Befund nachpruefbar.')]),Spacer(1,5*mm)]
+
+    # D.10 Stage 13 — Qualität
+    qual=ctx.stage_status.get('quality','—') if getattr(ctx,'stage_status',None) else '—'
+    nerr=len(getattr(ctx,'stage_errors',{}) or {})
+    d10=[['Merkmal','Wert'],['Qualitätsbewertung',str(qual)],['Stage-Fehler',str(nerr)]]
+    S+=[KeepTogether([h2('Stage 13 — Qualitätsprüfung'),Spacer(1,2*mm),
+        tbl(d10,[44*mm,W-44*mm])]),Spacer(1,5*mm)]
+
+    # D.11 Stage 14 — erzeugte Dateien
+    try:
+        files=sorted(p.name for p in case_dir.iterdir()
+                     if p.is_file() and p.suffix.lower() in ('.pdf','.xlsx','.csv','.json'))
+    except Exception:
+        files=[]
+    if files:
+        d11=[['Erzeugte Datei']]+[[f] for f in files[:30]]
+        S+=[KeepTogether([h2('Stage 14 — Export (erzeugte Dateien)'),Spacer(1,2*mm),
+            tbl(d11,[W])])]
 
     doc.build(S)
     log.info(f'  Moderner Bericht erstellt → {out_file.name}')
