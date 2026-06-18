@@ -566,4 +566,19 @@ def _run_reexport_flow(output_dir: Path) -> int:
     # Stage 14 ausführen
     ui = PipelineUI(image_name=selected['name'])
     ui.start()
-    
+    try:
+        ctx = run_stage(stage14_export.run, ctx, 'stage_14', ui)
+        ui.show_stage14_detail(ctx)
+    finally:
+        ui.stop()
+
+    print()
+    print(f'  ✅  Dokumente erstellt in:')
+    print(f'      {new_case_dir}')
+    print()
+
+    return 0 if not ctx.stage_errors else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
