@@ -22,6 +22,34 @@ _SEVC  = {'CRITICAL': '#B23A32', 'HIGH': '#B97E22', 'MEDIUM': '#6B7280',
 NBSP = ' '
 
 
+def _xlsx_rows(path: Path, sheet: str):
+    """Liest eine Excel-Beilage und gibt (header, datenzeilen) zurueck.
+    Zeile 1 = Banner, Zeile 2 = Header, ab Zeile 3 = Daten. Defensiv:
+    fehlende Datei/Blatt/openpyxl -> ([], []). Damit kann der Report die
+    'wichtigsten Zeilen' jeder Beilage als Auszug zeigen — garantiert
+    identisch zum Excel-Inhalt."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return [], []
+    if not path or not path.exists():
+        return [], []
+    try:
+        wb = load_workbook(path, read_only=True, data_only=True)
+        if sheet not in wb.sheetnames:
+            wb.close()
+            return [], []
+        rows = [tuple(r) for r in wb[sheet].iter_rows(values_only=True)]
+        wb.close()
+    except Exception:
+        return [], []
+    if len(rows) < 3:
+        return [], []
+    header = ['' if c is None else str(c) for c in rows[1]]
+    data   = [['' if c is None else c for c in r] for r in rows[2:]]
+    return header, data
+
+
 def build_modern_report(ctx, case_dir: Path) -> None:
     """Erzeugt forensischer_analysebericht.pdf. Fehler werden geloggt,
     nicht propagiert (darf den restlichen Export nie blockieren)."""
@@ -313,11 +341,63 @@ def _build(ctx, case_dir: Path) -> None:
         S+=[Spacer(1,2.5*mm)]
     else:
         S+=[Paragraph('Keine relevanten Timeline-Ereignisse (critical/high/medium).',S_BODY),Spacer(1,2.5*mm)]
-    S+=[beilage('Dateisystem-Timeline: <b>filtered_filesystem_timeline.xlsx</b> · '
-                'Ereignisse: <b>activity_timeline.csv</b> · '
-                'Sitzungen: <b>reboot_sessions.xlsx</b> / <b>ip_sessions.xlsx</b> · interaktiv: Timesketch'),
-        Spacer(1,8*mm)]
+    S+=[Spacer(1,4*mm)]
 
+    # ── Auszug 1: ip_sessions — Top externe IPs mit Quellen-Abgleich ──────────
+    _iph,_ipd=_xlsx_rows(case_dir/'ip_sessions.xlsx','Externe IPs')
+    if not _ipd:
+        _iph,_ipd=_xlsx_rows(case_dir/'ip_sessions.xlsx','IP-Übersicht')
+    if _ipd:
+        def _g(r,i): return str(r[i]) if i < len(r) and r[i] not in (None,'') else '—'
+        rows=[['IP','Logins','auth.log','Journal','wtmp','wtmpdb']]
+        for r in _ipd[:5]:
+            rows.append([_g(r,0),_g(r,2),_g(r,9),_g(r,10),_g(r,11),_g(r,12)])
+        S+=[KeepTogether([h2('Anmelde-Sitzungen — Top-IPs (Quellen-Abgleich)'),Spacer(1,2*mm),
+            tbl(rows,[W-16*mm-23*mm-23*mm-20*mm-23*mm-11,16*mm,23*mm,23*mm,20*mm,23*mm],right={1}),
+            Spacer(1,1.5*mm),
+            prov('Die Haken-Spalten zeigen, in welchen Quellen der Login belegt ist. '
+                 'Login nur in wtmp/wtmpdb, aber nicht in auth.log/Journal -> Hinweis auf geloeschte Logs.'),
+            Spacer(1,2*mm),
+            beilage('Alle IPs, Login-Methoden, Zeiten und Quell-Pfade: <b>ip_sessions.xlsx</b>')]),
+            Spacer(1,6*mm)]
+
+    # ── Auszug 2: reboot_sessions — auffälligste Betriebszeiträume ────────────
+    _rbh,_rbd=_xlsx_rows(case_dir/'reboot_sessions.xlsx','Übersicht')
+    if _rbd:
+        flagged=[r for r in _rbd if len(r)>5 and str(r[5]).strip()]
+        pick=(flagged or _rbd)[:5]
+        rows=[['Boot (UTC)','Shutdown (UTC)','Laufzeit','Ereig.','Hinweis']]
+        for r in pick:
+            rows.append([str(r[1]) if len(r)>1 else '—',str(r[2]) if len(r)>2 else '—',
+                         str(r[3]) if len(r)>3 else '—',str(r[4]) if len(r)>4 else '—',
+                         (str(r[5]) if len(r)>5 and str(r[5]).strip() else '—')])
+        S+=[KeepTogether([h2('Reboot-Sitzungen — auffälligste Betriebszeiträume'),Spacer(1,2*mm),
+            tbl(rows,[29*mm,29*mm,20*mm,14*mm,W-29*mm-29*mm-20*mm-14*mm-11],right={3},nowrap_cols={0,1}),
+            Spacer(1,2*mm),
+            beilage('Alle Betriebszeiträume mit Ereignissen je Sitzung: <b>reboot_sessions.xlsx</b>')]),
+            Spacer(1,6*mm)]
+
+    # ── Auszug 3: filtered_filesystem_timeline — kritischste Einträge ─────────
+    _fsh,_fsd=_xlsx_rows(case_dir/'filtered_filesystem_timeline.xlsx','Timeline')
+    if _fsd:
+        rows=[['Datei','MACB','mtime (UTC)','ctime (UTC)','Auffälligkeit','Schwere']]
+        for r in _fsd[:5]:
+            rows.append([str(r[0]) if len(r)>0 else '',str(r[1]) if len(r)>1 else '',
+                         str(r[2]) if len(r)>2 else '',str(r[4]) if len(r)>4 else '',
+                         str(r[6]) if len(r)>6 else '',
+                         (str(r[7]) if len(r)>7 and str(r[7]) else 'INFO').upper()])
+        S+=[KeepTogether([h2('Dateisystem-Timeline — kritischste Einträge'),Spacer(1,2*mm),
+            tbl(rows,[W-15*mm-25*mm-25*mm-28*mm-22*mm-11,15*mm,25*mm,25*mm,28*mm,22*mm],
+                sev_col=5,nowrap_cols={2,3}),
+            Spacer(1,1.5*mm),
+            prov('MACB zeigt vorhandene Zeitstempel-Typen (m/a/c/b). ctime neuer als mtime '
+                 'oder btime > mtime -> moegliches Timestomping/Kopieren.'),
+            Spacer(1,2*mm),
+            beilage('Alle Dateien mit MACB-Zeitstempeln und Filterkriterien: '
+                    '<b>filtered_filesystem_timeline.xlsx</b> · Ereignisse: <b>activity_timeline.csv</b>')]),
+            Spacer(1,6*mm)]
+
+    S+=[beilage('Interaktive Gesamt-Timeline: <b>Timesketch</b>'),Spacer(1,8*mm)]
     # ════ 06 IOCs ════
     S+=h1('06','Indikatoren (IOCs) — Auszug')
     if iocs:
