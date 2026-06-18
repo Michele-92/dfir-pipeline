@@ -962,3 +962,60 @@ class PipelineUI:
     def _refresh(self) -> None:
         if self._live:
             self._live.update(self._render())
+
+    def _render(self) -> Panel:
+        self._spin_idx = (self._spin_idx + 1) % len(SPINNERS)
+        spin = SPINNERS[self._spin_idx]
+        elapsed = _fmt_time(time.time() - self._start)
+
+        t = Table(
+            box=box.SIMPLE_HEAD,
+            show_header=True,
+            header_style='bold white on dark_blue',
+            border_style='bright_blue',
+            expand=True,
+        )
+        t.add_column('Stage', style='bold cyan', width=6,  justify='center')
+        t.add_column('Bezeichnung',               min_width=30)
+        t.add_column('Status',                    width=24)
+        t.add_column('Zeit',                      width=7, justify='right')
+
+        for key, (num, name) in STAGE_INFO.items():
+            s = self.states[key]
+
+            if s.status == 'waiting':
+                status = Text('⏸  wartend', style='dim')
+                dur    = ''
+            elif s.status == 'running':
+                running = time.time() - (s.start_time or time.time())
+                status  = Text(f'{spin}  läuft...', style='bold yellow')
+                dur     = _fmt_time(running)
+            elif s.status == 'ok':
+                label  = s.note if s.note else 'OK'
+                status = Text(f'✅  {label}', style='bold green')
+                dur    = f'{s.duration:.0f}s' if s.duration else ''
+            elif s.status == 'skipped':
+                status = Text('⏭  übersprungen', style='dim')
+                dur    = ''
+            else:
+                status = Text('❌  FEHLER', style='bold red')
+                dur    = f'{s.duration:.0f}s' if s.duration else ''
+
+            t.add_row(num, name, status, dur)
+
+        subtitle = f'[dim]{self.message}[/dim]' if self.message else ''
+        title    = (
+            f'[bold bright_blue]DFIR Pipeline v3.0[/bold bright_blue]'
+            f'  [dim]│  {self.image_name}  │  {elapsed}[/dim]'
+        )
+        inner = Table.grid()
+        inner.add_row(t)
+        if subtitle:
+            inner.add_row(Text(f'  {self.message}', style='dim'))
+
+        return Panel(inner, title=title, border_style='bright_blue', padding=(0, 1))
+
+
+def _fmt_time(seconds: float) -> str:
+    s = int(seconds)
+    return f'{s // 60:02d}:{s % 60:02d}'
