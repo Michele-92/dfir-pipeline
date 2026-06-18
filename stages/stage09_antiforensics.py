@@ -180,6 +180,43 @@ def _get_yara_rules_dir(yara_mode: str) -> Path:
     return base / 'custom'
 
 
+def _compile_yara_rules(rule_files):
+    """Kompiliert alle Regeldateien zu EINEM yara-Objekt.
+
+    Statt jede Regeldatei einzeln zu kompilieren und jedes Ziel gegen jede
+    Regeldatei separat zu matchen (O(Regeln × Dateien)), wird hier ein einziges
+    kompiliertes Objekt erzeugt: jedes Ziel wird danach nur EINMAL gegen alle
+    Regeln gematcht (O(Dateien)).
+
+    Robust: schlaegt der Bundle-Compile fehl (mind. eine fehlerhafte
+    Regeldatei), werden die defekten Dateien herausgefiltert und der Rest
+    gebuendelt kompiliert — wie bisher kein Totalausfall durch eine Regel.
+
+    Rueckgabe: (compiled | None, anzahl_uebersprungen)
+    """
+    import yara
+    # filepaths={namespace: pfad} — eindeutiger Namespace je Datei verhindert
+    # 'duplicated rule identifier' bei gleichnamigen Regeln aus verschiedenen
+    # Dateien.
+    namespaces = {f'r{i}': str(rf) for i, rf in enumerate(rule_files)}
+    try:
+        return yara.compile(filepaths=namespaces), 0
+    except yara.Error:
+        good, skipped = {}, 0
+        for ns, path in namespaces.items():
+            try:
+                yara.compile(filepath=path)   # nur Validierung
+                good[ns] = path
+            except Exception:
+                skipped += 1
+        if not good:
+            return None, skipped
+        try:
+            return yara.compile(filepaths=good), skipped
+        except yara.Error:
+            return None, skipped
+
+
 def _check_yara(ctx: PipelineContext) -> List[Dict]:
     hits = []
     rules_dir = _get_yara_rules_dir(ctx.yara_mode)
@@ -188,41 +225,53 @@ def _check_yara(ctx: PipelineContext) -> List[Dict]:
         log.warning(f'  YARA-Regelordner nicht gefunden: {rules_dir}')
         return hits
     try:
-        import yara
-        rule_files = list(rules_dir.rglob('*.yar'))
-        if not rule_files:
-            return hits
-
-        case_dir = ctx.case_dir
-        if not case_dir or not case_dir.exists():
-            return hits
-
-        targets = [t for t in case_dir.rglob('*')
-                   if t.is_file() and t.stat().st_size <= 50_000_000]
-
-        for rf in rule_files:
-            try:
-                rule_set = yara.compile(filepath=str(rf))
-                for target in targets:
-                    try:
-                        matches = rule_set.match(str(target), timeout=30)
-                        for match in matches:
-                            hits.append({
-                                'type':     'yara_match',
-                                'file':     str(target),
-                                'details':  f'YARA-Regel: {match.rule} Tags: {match.tags}',
-                                'severity': 'high',
-                                'source':   'yara',
-                                'timestamp':'',
-                                'rule':     match.rule,
-                            })
-                    except Exception:
-                        continue
-                del rule_set
-            except Exception:
-                continue
+        import yara  # noqa: F401  (nur Verfuegbarkeitspruefung)
     except ImportError:
         log.warning('yara-python nicht installiert — YARA-Scan übersprungen')
+        return hits
+
+    rule_files = sorted(rules_dir.rglob('*.yar'))
+    if not rule_files:
+        return hits
+
+    case_dir = ctx.case_dir
+    if not case_dir or not case_dir.exists():
+        return hits
+
+    # Scan-Scope: nur extrahierte/wiederhergestellte Beweismittel (raw/),
+    # NICHT die eigenen Pipeline-Ausgaben (events.db, Reports, Excels).
+    scan_root = case_dir / 'raw'
+    if not scan_root.exists():
+        scan_root = case_dir
+
+    # ── EINMAL kompilieren ───────────────────────────────────────────────────
+    compiled, skipped = _compile_yara_rules(rule_files)
+    if compiled is None:
+        log.warning(f'  YARA: keine kompilierbaren Regeln ({skipped} fehlerhaft)')
+        return hits
+    if skipped:
+        log.info(f'  YARA: {len(rule_files) - skipped}/{len(rule_files)} '
+                 f'Regeldateien kompiliert ({skipped} fehlerhaft übersprungen)')
+
+    targets = [t for t in scan_root.rglob('*')
+               if t.is_file() and t.stat().st_size <= 50_000_000]
+
+    # ── Jedes Ziel nur EINMAL gegen alle Regeln matchen ──────────────────────
+    for target in targets:
+        try:
+            matches = compiled.match(str(target), timeout=30)
+        except Exception:
+            continue
+        for match in matches:
+            hits.append({
+                'type':     'yara_match',
+                'file':     str(target),
+                'details':  f'YARA-Regel: {match.rule} Tags: {match.tags}',
+                'severity': 'high',
+                'source':   'yara',
+                'timestamp':'',
+                'rule':     match.rule,
+            })
     return hits
 
 
