@@ -1306,23 +1306,31 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
         'info':     _fill('3A6B3A'),
     }
 
-    # Quell-Pfad-Mapping: Log-Typ → vollständiger Dateipfad auf dem Image
+    # Quell-Pfad-Mapping: event.source (Parser-Quellenname) → Dateipfad auf dem
+    # Image. WICHTIG: der kern-Parser setzt source='kernel' (nicht 'kern') —
+    # deshalb beide Schluessel auf /var/log/kern.log abbilden, sonst landet
+    # das nackte Wort "kernel" in der Quelle-Spalte (Betreuer-Befund).
     _SRC_PATH_MAP = {
-        'syslog':   '/var/log/syslog',
-        'journal':  '/var/log/journal/ (systemd)',
-        'auth':     '/var/log/auth.log',
-        'auth.log': '/var/log/auth.log',
-        'kern':     '/var/log/kern.log',
-        'kern.log': '/var/log/kern.log',
-        'daemon':   '/var/log/daemon.log',
-        'boot':     '/var/log/boot.log',
-        'messages': '/var/log/messages',
-        'wtmp':     '/var/log/wtmp',
-        'utmp':     '/var/run/utmp',
-        'btmp':     '/var/log/btmp',
-        'lastlog':  '/var/log/lastlog',
-        'dpkg':     '/var/log/dpkg.log',
-        'apt':      '/var/log/apt/history.log',
+        'syslog':       '/var/log/syslog',
+        'journal':      '/var/log/journal/ (systemd)',
+        'journald':     '/var/log/journal/ (systemd)',
+        'systemd':      '/var/log/syslog',
+        'auth':         '/var/log/auth.log',
+        'auth.log':     '/var/log/auth.log',
+        'kern':         '/var/log/kern.log',
+        'kern.log':     '/var/log/kern.log',
+        'kernel':       '/var/log/kern.log',   # kern_parser: source='kernel'
+        'kernel_event': '/var/log/kern.log',
+        'daemon':       '/var/log/daemon.log',
+        'boot':         '/var/log/boot.log',
+        'messages':     '/var/log/messages',
+        'wtmp':         '/var/log/wtmp',
+        'wtmpdb':       '/var/lib/wtmpdb/wtmp.db',
+        'utmp':         '/var/run/utmp',
+        'btmp':         '/var/log/btmp',
+        'lastlog':      '/var/log/lastlog',
+        'dpkg':         '/var/log/dpkg.log',
+        'apt':          '/var/log/apt/history.log',
     }
 
     def _src_path_reboot(source: str) -> str:
@@ -1330,12 +1338,18 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
         return _SRC_PATH_MAP.get(s, source or '—')
 
     def _src_for_event(event) -> str:
-        """Echte Quelle: Originalpfad aus der Extraktion (Provenienz-Feld).
-        Im Fall-Modus mit [Image]-Praefix. Fallback: typischer Standardpfad."""
-        op = getattr(event, 'orig_path', '') or ''
-        base = op if op else _src_path_reboot(event.source)
-        ev = getattr(event, 'evidence', '') or ''
-        return f'[{ev}] {base}' if ev else base
+        """Quelle pfadgenau: bevorzugt den Originalpfad aus der Extraktion
+        (Provenienz-Feld orig_path) — direkt im Image nachpruefbar. Fehlt der
+        (z.B. Alt-Snapshot, Hayabusa), wird der typische Standardpfad mit '*'
+        als unverifiziert gekennzeichnet. Im Fall-Modus mit [Image]-Praefix."""
+        op = (getattr(event, 'orig_path', '') or '').strip()
+        ev = (getattr(event, 'evidence', '') or '').strip()
+        if op:
+            return f'[{ev}] {op}' if ev else op
+        fb = _src_path_reboot(event.source)
+        if fb and fb != '—':
+            fb = f'{fb} *'   # Standardpfad, nicht aus Extraktion verifiziert
+        return f'[{ev}] {fb}' if ev else fb
 
     # ── Pass 1: Reboot-Events sammeln + Session-Pairing ───────────────────────
     reboot_events = []
@@ -1460,8 +1474,8 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
     # ── Pro-Reboot-Sheets ─────────────────────────────────────────────────────
     MAX_SHEETS        = 20
     MAX_SHEET_ROWS    = 500
-    HDR_D = ['Timestamp_UTC', 'Severity', 'Event_Type', 'Benutzer', 'IP', 'Quelle', 'Nachricht']
-    WID_D = [22, 12, 24, 15, 16, 20, 70]
+    HDR_D = ['Timestamp_UTC', 'Severity', 'Event_Type', 'Benutzer', 'IP', 'Quelle (Pfad)', 'Nachricht']
+    WID_D = [22, 12, 24, 15, 16, 30, 70]
     LC_D  = get_column_letter(len(HDR_D))
     _sev_ord = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4}
 
@@ -1593,11 +1607,13 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
          'Erkannt über Event-Types: shutdown, system_shutdown '
          'sowie Keywords: "shutting down", "halt", "poweroff", '
          '"reached target shutdown" — typischerweise aus /var/log/syslog.'),
-        ('Spalte "Quelle"',
+        ('Spalte "Quelle (Pfad)"',
          'Originalpfad der Log-Datei auf dem Image, dokumentiert bei der '
          'Extraktion (TSK fls/icat, siehe extraction_manifest.json). '
-         'Direkt im Image nachpruefbar. Bei Quellen ohne Manifest-Eintrag '
-         '(z.B. Hayabusa) wird der typische Standardpfad angezeigt.'),
+         'Direkt im Image nachpruefbar. Beispiel: Kernel-Boot-Meldungen '
+         '(source=kernel) verweisen auf /var/log/kern.log. Ein nachgestelltes '
+         '"*" bedeutet: kein Extraktionspfad vorhanden, angezeigt wird der '
+         'typische Standardpfad (nicht aus der Extraktion verifiziert).'),
     ], 8)
 
     # Abschnitt 3 — Spalten der Reboot-Sheets
@@ -1618,10 +1634,11 @@ def _write_reboot_sessions_excel(ctx: PipelineContext, case_dir: Path) -> None:
          'Benutzer der dem Ereignis zugeordnet ist, falls im Log vorhanden.'),
         ('IP',
          'IP-Adresse die dem Ereignis zugeordnet ist, falls im Log vorhanden.'),
-        ('Quelle',
+        ('Quelle (Pfad)',
          'Originalpfad der Log-Quelldatei auf dem Image (aus dem '
-         'Extraktions-Manifest). Direkt nachpruefbar — z.B. /var/log/syslog '
-         'enthaelt die Boot-Kernel-Meldungen.'),
+         'Extraktions-Manifest). Direkt nachpruefbar — z.B. source=kernel '
+         '-> /var/log/kern.log, source=syslog -> /var/log/syslog. Ein "*" '
+         'kennzeichnet einen unverifizierten Standardpfad (kein Manifest-Eintrag).'),
         ('Nachricht',
          'Original-Log-Zeile (gekürzt auf 200 Zeichen). '
          'Zeigt den genauen Wortlaut wie er in der Log-Datei steht.'),
