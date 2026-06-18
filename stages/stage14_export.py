@@ -1888,10 +1888,15 @@ def _write_filtered_filesystem_timeline_excel(ctx: PipelineContext, case_dir: Pa
         key=lambda r: (_SEV_ORD_TL.get(r['severity'], 4), r['fp'])
     )
 
+    def _macb_flag(m, a, c, b) -> str:
+        """Kompakte MACB-Notation: vorhandener Typ = Buchstabe, fehlend = '.'."""
+        return (('m' if m else '.') + ('a' if a else '.')
+                + ('c' if c else '.') + ('b' if b else '.'))
+
     wb  = Workbook()
-    HDR = ['Datei_Pfad', 'mtime_UTC', 'atime_UTC', 'ctime_UTC', 'btime_UTC',
+    HDR = ['Datei_Pfad', 'MACB', 'mtime_UTC', 'atime_UTC', 'ctime_UTC', 'btime_UTC',
            'Auffälligkeit', 'Severity', 'Kategorie']
-    WID = [60, 22, 22, 22, 22, 42, 12, 14]
+    WID = [60, 8, 22, 22, 22, 22, 42, 12, 14]
     LC  = get_column_letter(len(HDR))
 
     # ── Sheet 1: Timeline ─────────────────────────────────────────────────────
@@ -1920,6 +1925,7 @@ def _write_filtered_filesystem_timeline_excel(ctx: PipelineContext, case_dir: Pa
         auf = _auffaelligkeit(row['m'], row['a'], row['c'], row['b'])
         for col, val in enumerate([
             row['fp'],
+            _macb_flag(row['m'], row['a'], row['c'], row['b']),
             _fmt_ts_tl(row['m']),
             _fmt_ts_tl(row['a']),
             _fmt_ts_tl(row['c']),
@@ -1931,13 +1937,15 @@ def _write_filtered_filesystem_timeline_excel(ctx: PipelineContext, case_dir: Pa
             c = ws.cell(ri, col, val)
             c.border = _BDR
             c.alignment = _align(
-                h='center' if col in (7, 8) else 'left',
-                wrap=(col == 6),
+                h='center' if col in (2, 8, 9) else 'left',
+                wrap=(col == 7),
             )
-            if col == 7:
+            if col == 8:
                 c.fill = _sev_badge.get(sev, _fill('5F5E5A'))
                 c.font = _font(bold=True, color='FFFFFF', size=9)
-            elif col == 6 and auf != '—':
+            elif col == 2:
+                c.fill = rbg; c.font = Font(name='Consolas', size=9)
+            elif col == 7 and auf != '—':
                 c.fill = _fill('FFF5F5') if ri % 2 == 0 else _fill('FFEDED')
                 c.font = _font(size=9, color='A32D2D')
             else:
@@ -2022,7 +2030,9 @@ def _write_filtered_filesystem_timeline_excel(ctx: PipelineContext, case_dir: Pa
          'Wann wurde die Datei zuletzt gelesen / geöffnet?',
          '✅ Ja — mit touch -a manipulierbar'),
         ('c', 'ctime',
-         'Wann wurden die Metadaten zuletzt geändert (Rechte, Eigentümer, Links)?',
+         'Inode-Änderungszeit (oft „Inode Time" genannt): wann wurden die '
+         'Metadaten zuletzt geändert (Rechte, Eigentümer, Links)? '
+         'NICHT die Erstellzeit — damit häufig verwechselt.',
          '❌ Nein — wird nur vom Kernel gesetzt, nicht direkt manipulierbar'),
         ('b', 'btime',
          'Wann wurde die Datei erstellt (Birth/Creation Time)?',
@@ -2094,6 +2104,17 @@ def _write_filtered_filesystem_timeline_excel(ctx: PipelineContext, case_dir: Pa
          'TSK fls -m liest die rohen Inode-Metadaten direkt aus dem Disk-Image. '
          'mactime konvertiert das Body-File in eine lesbare Timeline. '
          'Die Timestamps stammen also direkt aus dem Dateisystem — nicht aus Logs.'),
+        ('Worauf basiert der Filter?',
+         'Der Filter wählt DATEIEN nach Pfad-Relevanz (Whitelist/Blacklist) und '
+         'Severity aus — NICHT nach Timestamp-Typ. Für jede ausgewählte Datei '
+         'werden ALLE vier MACB-Zeitstempel angezeigt, soweit auf dem Image '
+         'vorhanden. Ein „—" bedeutet: dieser Zeitstempel existiert nicht '
+         '(z.B. atime bei noatime-Mount, btime auf ext3).'),
+        ('Spalte „MACB"',
+         'Kompakte Anzeige, welche Zeitstempel-Typen für die Datei vorhanden '
+         'sind: m=mtime, a=atime, c=ctime, b=btime; ein Punkt (.) = fehlt. '
+         'Beispiel „m.c." = nur mtime und ctime vorhanden. Die genauen Werte '
+         'stehen in den vier Spalten mtime_UTC … btime_UTC.'),
         ('Immer enthalten',
          'Einträge mit Severity HIGH oder CRITICAL sowie Dateipfade die bereits '
          'in den forensic_findings auftauchen.'),
