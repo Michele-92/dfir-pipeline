@@ -180,7 +180,7 @@ def _get_yara_rules_dir(yara_mode: str) -> Path:
     return base / 'custom'
 
 
-def _compile_yara_rules(rule_files):
+def _compile_yara_rules(rule_files, cache_path=None):
     """Kompiliert alle Regeldateien zu EINEM yara-Objekt.
 
     Statt jede Regeldatei einzeln zu kompilieren und jedes Ziel gegen jede
@@ -192,29 +192,61 @@ def _compile_yara_rules(rule_files):
     Regeldatei), werden die defekten Dateien herausgefiltert und der Rest
     gebuendelt kompiliert — wie bisher kein Totalausfall durch eine Regel.
 
+    Compile-Cache (Laufzeit): Bei unveraenderten Regeln wird das kompilierte
+    Objekt von der Platte geladen (yara.load) statt ~1200 Regeln erneut zu
+    kompilieren — spart ~30s pro Lauf. Invalidierung per Fingerprint
+    (Anzahl Regeldateien + juengste mtime).
+
     Rueckgabe: (compiled | None, anzahl_uebersprungen)
     """
     import yara
-    # filepaths={namespace: pfad} — eindeutiger Namespace je Datei verhindert
-    # 'duplicated rule identifier' bei gleichnamigen Regeln aus verschiedenen
-    # Dateien.
+
+    # ── Cache-Hit? ───────────────────────────────────────────────────────────
+    meta_path = None
+    fp = None
+    if cache_path is not None:
+        try:
+            cache_path = Path(cache_path)
+            meta_path  = Path(str(cache_path) + '.meta')
+            newest = max((rf.stat().st_mtime for rf in rule_files), default=0)
+            fp = f'{len(rule_files)}:{newest:.0f}'
+            if cache_path.exists() and meta_path.exists():
+                cached = meta_path.read_text(encoding='utf-8').strip().split('|')
+                if cached and cached[0] == fp:
+                    skipped = int(cached[1]) if len(cached) > 1 and cached[1].isdigit() else 0
+                    log.info('  YARA: kompilierten Regelsatz aus Cache geladen (kein Recompile)')
+                    return yara.load(str(cache_path)), skipped
+        except Exception:
+            cache_path = None   # Cache bei Problemen deaktivieren
+
+    # ── Kompilieren ──────────────────────────────────────────────────────────
     namespaces = {f'r{i}': str(rf) for i, rf in enumerate(rule_files)}
+    compiled, skipped = None, 0
     try:
-        return yara.compile(filepaths=namespaces), 0
+        compiled = yara.compile(filepaths=namespaces)
     except yara.Error:
-        good, skipped = {}, 0
+        good = {}
         for ns, path in namespaces.items():
             try:
                 yara.compile(filepath=path)   # nur Validierung
                 good[ns] = path
             except Exception:
                 skipped += 1
-        if not good:
-            return None, skipped
+        if good:
+            try:
+                compiled = yara.compile(filepaths=good)
+            except yara.Error:
+                compiled = None
+
+    # ── Cache schreiben ──────────────────────────────────────────────────────
+    if compiled is not None and cache_path is not None and fp is not None:
         try:
-            return yara.compile(filepaths=good), skipped
-        except yara.Error:
-            return None, skipped
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            compiled.save(str(cache_path))
+            meta_path.write_text(f'{fp}|{skipped}', encoding='utf-8')
+        except Exception:
+            pass
+    return compiled, skipped
 
 
 def _check_yara(ctx: PipelineContext) -> List[Dict]:
@@ -245,7 +277,8 @@ def _check_yara(ctx: PipelineContext) -> List[Dict]:
         scan_root = case_dir
 
     # ── EINMAL kompilieren ───────────────────────────────────────────────────
-    compiled, skipped = _compile_yara_rules(rule_files)
+    cache_path = (Path.home() / '.cache' / 'dfir-pipeline' / f'yara_{ctx.yara_mode}.bin')
+    compiled, skipped = _compile_yara_rules(rule_files, cache_path)
     if compiled is None:
         log.warning(f'  YARA: keine kompilierbaren Regeln ({skipped} fehlerhaft)')
         return hits

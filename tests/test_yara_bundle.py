@@ -86,3 +86,33 @@ def test_compile_helper_skipped_count(tmp_path):
     compiled, skipped = s9._compile_yara_rules(rule_files)
     assert compiled is not None
     assert skipped == 1          # genau broken.yar
+
+
+def test_yara_cache_speichert_und_laedt(tmp_path):
+    rules_dir = tmp_path / 'r'
+    _write_rules(rules_dir)
+    rule_files = sorted(rules_dir.rglob('*.yar'))
+    cache = tmp_path / 'cache' / 'yara.bin'
+    c1, sk1 = s9._compile_yara_rules(rule_files, cache)
+    assert c1 is not None
+    assert cache.exists() and Path(str(cache) + '.meta').exists()
+    # 2. Aufruf -> Cache-Hit, gleiches Ergebnis, funktionsfaehiges Objekt
+    c2, sk2 = s9._compile_yara_rules(rule_files, cache)
+    assert c2 is not None and sk2 == sk1
+    f = tmp_path / 't.txt'
+    f.write_text('EVIL_MARKER')
+    assert any(m.rule == 'FindEvil' for m in c2.match(str(f)))
+
+
+def test_yara_cache_invalidierung(tmp_path):
+    rules_dir = tmp_path / 'r'
+    _write_rules(rules_dir)
+    rule_files = sorted(rules_dir.rglob('*.yar'))
+    cache = tmp_path / 'yara.bin'
+    s9._compile_yara_rules(rule_files, cache)
+    meta1 = Path(str(cache) + '.meta').read_text()
+    # zusaetzliche Regeldatei -> Fingerprint (Dateianzahl) aendert sich
+    (rules_dir / 'c.yar').write_text('rule Extra { strings: $x = "X" condition: $x }')
+    s9._compile_yara_rules(sorted(rules_dir.rglob('*.yar')), cache)
+    meta2 = Path(str(cache) + '.meta').read_text()
+    assert meta1 != meta2

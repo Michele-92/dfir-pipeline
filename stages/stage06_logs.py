@@ -76,6 +76,22 @@ ALL_PARSERS = [
 _BATCH_SIZE = 1000
 
 
+def _count_lines_fast(path: Path) -> int:
+    """Zaehlt Zeilen per 1-MB-Chunks (zaehlt b'\\n') — deutlich weniger CPU als
+    eine Per-Zeilen-Iteration. Nur informativ (ctx.total_log_lines)."""
+    n = 0
+    try:
+        with path.open('rb') as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                n += chunk.count(b'\n')
+    except Exception:
+        return 0
+    return n
+
+
 def _split_case_rel(rel: str):
     """Zerlegt einen case-relativen Extraktionspfad in seine Provenienz.
 
@@ -210,7 +226,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
                     # Zeilenzaehlung nur fuer Dateien <= 100 MB —
                     # GB-Journale hier nochmal zu lesen kostet Minuten
                     if lf.stat().st_size <= 100 * 1024 * 1024:
-                        total_lines += sum(1 for _ in lf.open('rb'))
+                        total_lines += _count_lines_fast(lf)
                 except Exception:
                     pass
                 progress.set_postfix({'Events': f'{parsed_count:,}'})
@@ -239,7 +255,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
                     # Zeilenzaehlung nur fuer Dateien <= 100 MB —
                     # GB-Journale hier nochmal zu lesen kostet Minuten
                     if lf.stat().st_size <= 100 * 1024 * 1024:
-                        total_lines += sum(1 for _ in lf.open('rb'))
+                        total_lines += _count_lines_fast(lf)
                 except Exception:
                     pass
         if batch:
