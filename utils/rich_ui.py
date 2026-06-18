@@ -26,6 +26,7 @@ STAGE_INFO = {
     'stage_06':   ('06',    'Log-Parsing (38 Parser)'),
     'stage_07':   ('07',    'IOC-Extraktion'),
     'stage_08':   ('08',    'Datennormalisierung'),
+    'stage_08_6': ('08.6',  'Konsistenzprüfung (Event-Korroboration)'),
     'stage_09':   ('09',    'Anti-Forensics-Erkennung'),
     'stage_8.5':  ('8.5',  'Forensische Timeline-Analyse'),
     'stage_13':   ('13',    'Qualitätsprüfung'),
@@ -519,6 +520,52 @@ class PipelineUI:
             width=console.width,
         ))
 
+    def show_stage086_detail(self, ctx) -> None:
+        """Stage 8.6 — Konsistenzpruefung (Event-Korroboration)."""
+        checks  = getattr(ctx, 'consistency_checks', [])
+        anomaly = getattr(ctx, 'consistency_anomalies', 0)
+
+        if not checks:
+            t = Table(box=box.SIMPLE, show_header=False, expand=True)
+            t.add_column('Info', style='dim')
+            t.add_row('Keine Korroboration moeglich — keine Basic-Checks oder events.db.')
+            t.add_row('Geprüft wird: Log vorhanden aber 0 Events · Paket-Beleg per dpkg/apt.')
+            console.print(Panel(
+                t, title='[bold cyan]Stage 08.6 — Konsistenzprüfung[/bold cyan]',
+                border_style='cyan', padding=(0, 1),
+                subtitle='[dim]keine Daten[/dim]'))
+            return
+
+        t = Table(box=box.SIMPLE, show_header=True, border_style='cyan', expand=True)
+        if getattr(ctx, 'combined_case', False):
+            t.add_column('Image', width=16)
+        t.add_column('Service/Log', min_width=18)
+        t.add_column('Befund', min_width=40)
+        t.add_column('Quelle (Pfad)', min_width=24)
+        t.add_column('Schwere', width=9)
+
+        sev_style = {'high': 'bold red', 'medium': 'yellow',
+                     'info': 'green', 'low': 'dim'}
+        for c in checks:
+            sv = (c.get('severity') or 'info').lower()
+            row = []
+            if getattr(ctx, 'combined_case', False):
+                row.append((c.get('image') or '—')[:16])
+            row += [
+                c.get('service', '?'),
+                Text(c.get('detail', ''), style=sev_style.get(sv, 'white')),
+                c.get('source_path', '—'),
+                Text(sv.upper(), style=sev_style.get(sv, 'white')),
+            ]
+            t.add_row(*row)
+
+        console.print(Panel(
+            t, title='[bold cyan]Stage 08.6 — Konsistenzprüfung (Event-Korroboration)[/bold cyan]',
+            border_style='cyan', padding=(0, 1),
+            subtitle=f'[bold yellow]Anomalien: {anomaly}[/bold yellow]' if anomaly
+                     else '[bold green]Keine Anomalien ✅[/bold green]',
+            width=console.width))
+
     def show_stage05_detail(self, ctx) -> None:
         t = Table(box=box.ROUNDED, show_header=False,
                   border_style='cyan', expand=True)
@@ -915,60 +962,3 @@ class PipelineUI:
     def _refresh(self) -> None:
         if self._live:
             self._live.update(self._render())
-
-    def _render(self) -> Panel:
-        self._spin_idx = (self._spin_idx + 1) % len(SPINNERS)
-        spin = SPINNERS[self._spin_idx]
-        elapsed = _fmt_time(time.time() - self._start)
-
-        t = Table(
-            box=box.SIMPLE_HEAD,
-            show_header=True,
-            header_style='bold white on dark_blue',
-            border_style='bright_blue',
-            expand=True,
-        )
-        t.add_column('Stage', style='bold cyan', width=6,  justify='center')
-        t.add_column('Bezeichnung',               min_width=30)
-        t.add_column('Status',                    width=24)
-        t.add_column('Zeit',                      width=7, justify='right')
-
-        for key, (num, name) in STAGE_INFO.items():
-            s = self.states[key]
-
-            if s.status == 'waiting':
-                status = Text('⏸  wartend', style='dim')
-                dur    = ''
-            elif s.status == 'running':
-                running = time.time() - (s.start_time or time.time())
-                status  = Text(f'{spin}  läuft...', style='bold yellow')
-                dur     = _fmt_time(running)
-            elif s.status == 'ok':
-                label  = s.note if s.note else 'OK'
-                status = Text(f'✅  {label}', style='bold green')
-                dur    = f'{s.duration:.0f}s' if s.duration else ''
-            elif s.status == 'skipped':
-                status = Text('⏭  übersprungen', style='dim')
-                dur    = ''
-            else:
-                status = Text('❌  FEHLER', style='bold red')
-                dur    = f'{s.duration:.0f}s' if s.duration else ''
-
-            t.add_row(num, name, status, dur)
-
-        subtitle = f'[dim]{self.message}[/dim]' if self.message else ''
-        title    = (
-            f'[bold bright_blue]DFIR Pipeline v3.0[/bold bright_blue]'
-            f'  [dim]│  {self.image_name}  │  {elapsed}[/dim]'
-        )
-        inner = Table.grid()
-        inner.add_row(t)
-        if subtitle:
-            inner.add_row(Text(f'  {self.message}', style='dim'))
-
-        return Panel(inner, title=title, border_style='bright_blue', padding=(0, 1))
-
-
-def _fmt_time(seconds: float) -> str:
-    s = int(seconds)
-    return f'{s // 60:02d}:{s % 60:02d}'

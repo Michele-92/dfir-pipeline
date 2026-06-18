@@ -145,6 +145,10 @@ def save_ctx_snapshot(ctx: PipelineContext, case_dir: Path) -> None:
         'basic_checks':          ctx.basic_checks,
         'basic_check_anomalies': ctx.basic_check_anomalies,
 
+        # ── Konsistenzpruefung (Stage 8.6) ───────────────────
+        'consistency_checks':    getattr(ctx, 'consistency_checks', []),
+        'consistency_anomalies': getattr(ctx, 'consistency_anomalies', 0),
+
         # ── E01-Hashes (optional) ────────────────────────────
         'e01_hash': getattr(ctx, 'e01_hash', None),
         'e01_md5':  getattr(ctx, 'e01_md5',  None),
@@ -403,6 +407,9 @@ def reconstruct_ctx(snapshot_path: Path, new_case_dir: Path) -> PipelineContext:
 
         basic_checks          = data.get('basic_checks', []),
         basic_check_anomalies = data.get('basic_check_anomalies', 0),
+
+        consistency_checks    = data.get('consistency_checks', []),
+        consistency_anomalies = data.get('consistency_anomalies', 0),
 
         iocs               = iocs,
         mitre_hits         = data.get('mitre_hits', []),

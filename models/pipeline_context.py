@@ -173,6 +173,10 @@ class PipelineContext:
     basic_checks:          List[dict] = field(default_factory=list)
     basic_check_anomalies: int        = 0
 
+    # ── Stage 08.6: Konsistenzpruefung (Event-Korroboration) ──
+    consistency_checks:    List[dict] = field(default_factory=list)
+    consistency_anomalies: int        = 0
+
     # ── Stage 05 erweitert ────────────────────────────────
     tool_selection:     Dict[str, str] = field(default_factory=dict)
 

@@ -30,6 +30,7 @@ from stages import (
     stage06_logs,
     stage07_ioc,
     stage08_normalize,
+    stage086_consistency,
     stage09_antiforensics,
     stage10_ml,
     stage11_mitre,
@@ -69,6 +70,7 @@ def run_stage(stage_fn, ctx: PipelineContext, stage_name: str,
                 'stage_06':   f'{ctx.parsed_events:,} Events',
                 'stage_07':   f'{len(ctx.iocs)} IOCs',
                 'stage_08':   f'{len(ctx.normalized_events):,} Events normalisiert',
+                'stage_08_6': f'{getattr(ctx, "consistency_anomalies", 0)} Anomalien',
                 'stage_09':   f'{len(ctx.antiforensics_hits)} Treffer',
                 'stage_10':   f'{len(ctx.anomalies)} Anomalien',
                 'stage_11':   f'{len(ctx.mitre_hits)} Techniken',
@@ -254,6 +256,8 @@ def _run_case_pipeline(args, images: list, output_dir: Path) -> int:
         ui.show_stage07_detail(ctx)
         ctx = run_stage(stage08_normalize.run,     ctx, 'stage_08', ui)
         ui.show_stage08_detail(ctx)
+        ctx = run_stage(stage086_consistency.run,  ctx, 'stage_08_6', ui)
+        ui.show_stage086_detail(ctx)
         ctx = run_stage(stage09_antiforensics.run, ctx, 'stage_09', ui)
         ui.show_stage09_detail(ctx)
         ctx = run_stage(stage_timeline_analysis.run, ctx, 'stage_8.5', ui)
@@ -329,6 +333,9 @@ def _run_pipeline(args, image_path: Path, output_dir: Path) -> int:
 
         ctx = run_stage(stage08_normalize.run,     ctx, 'stage_08',   ui)
         ui.show_stage08_detail(ctx)
+
+        ctx = run_stage(stage086_consistency.run,  ctx, 'stage_08_6', ui)
+        ui.show_stage086_detail(ctx)
 
         ctx = run_stage(stage09_antiforensics.run, ctx, 'stage_09',   ui)
         ui.show_stage09_detail(ctx)
@@ -559,19 +566,4 @@ def _run_reexport_flow(output_dir: Path) -> int:
     # Stage 14 ausführen
     ui = PipelineUI(image_name=selected['name'])
     ui.start()
-    try:
-        ctx = run_stage(stage14_export.run, ctx, 'stage_14', ui)
-        ui.show_stage14_detail(ctx)
-    finally:
-        ui.stop()
-
-    print()
-    print(f'  ✅  Dokumente erstellt in:')
-    print(f'      {new_case_dir}')
-    print()
-
-    return 0 if not ctx.stage_errors else 1
-
-
-if __name__ == '__main__':
-    sys.exit(main())
+    
