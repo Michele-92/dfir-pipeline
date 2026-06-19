@@ -18,6 +18,9 @@ MD5_RE     = re.compile(r'\b[0-9a-fA-F]{32}\b')
 SHA256_RE  = re.compile(r'\b[0-9a-fA-F]{64}\b')
 EMAIL_RE   = re.compile(r'\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b')
 CVE_RE     = re.compile(r'CVE-\d{4}-\d{4,7}')
+# Steuerzeichen: IOCs, die per Regex/bulk_extractor aus BINAEREN Daten
+# stammen, enthalten oft \x00-\x1f -> kein echter Indikator + sprengt Excel.
+_CTRL_RE   = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
 REG_RE     = re.compile(r'HKEY_[A-Z_]+\\[^\n\r\'"]+')
 
 PRIVATE_IPS = re.compile(
@@ -73,6 +76,8 @@ def run(ctx: PipelineContext) -> PipelineContext:
         bulk_dir = ctx.case_dir / 'raw' / 'bulk_extractor'
         bulk_iocs = _run_bulk_extractor(ctx.disk_image_path, bulk_dir, ctx)
         for ioc in bulk_iocs:
+            if _CTRL_RE.search(ioc.value or ''):
+                continue
             key = (ioc.type, ioc.value)
             if key not in seen:
                 seen.add(key)
@@ -85,7 +90,7 @@ def run(ctx: PipelineContext) -> PipelineContext:
         for ioc_type, pattern in EXTRACTORS:
             for match in pattern.finditer(text):
                 value = match.group(0).strip()
-                if not value:
+                if not value or _CTRL_RE.search(value):
                     continue
                 # Review-Fix #18: Private/reservierte IPs nicht verwerfen,
                 # aber als eigener Typ fuehren — verrauschen sonst die
@@ -169,7 +174,7 @@ def _run_bulk_extractor(image_path: Path, out_dir: Path,
                 real_type = 'ip_private'
             if real_type == 'domain' and value.rsplit('.', 1)[-1].lower() in PSEUDO_TLDS:
                 continue
-            if not value or (real_type, value) in seen:
+            if not value or _CTRL_RE.search(value) or (real_type, value) in seen:
                 continue
             seen.add((real_type, value))
             iocs.append(IOC(

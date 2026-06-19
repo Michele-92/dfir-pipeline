@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from models.pipeline_context import PipelineContext
+from utils import xlsx_safe  # noqa: F401  (aktiviert openpyxl-Steuerzeichen-Schutz)
 from stages.stage13_quality import evaluate_quality
 
 try:
