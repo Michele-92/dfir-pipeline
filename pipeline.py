@@ -83,7 +83,7 @@ def run_stage(stage_fn, ctx: PipelineContext, stage_name: str,
         ctx.stage_status[stage_name]  = 'FEHLER'
         if ctx.coc:
             ctx.coc.add_entry(stage_name, f'FEHLER: {e}')
-        log.error(f'Stufe {stage_name} fehlgeschlagen: {e}')
+        log.error(f'Stufe {stage_name} fehlgeschlagen: {e!r}', exc_info=True)
         ui.stage_done(stage_name, status='error')
         return ctx
 
@@ -117,6 +117,10 @@ def main():
                         help='Max. MB pro Log-Datei in Stage 6 (entpackt). '
                              '0 = unbegrenzt. Faustregel RAM-Bedarf: '
                              'Worker x 4 x diesem Wert (Standard: 50)')
+    parser.add_argument('--max-events-in-ram', type=int, default=500000,
+                        help='Max. Events im RAM in Stage 8 (Standard: 500000). '
+                             '0 = unbegrenzt. Hoeher = mehr RAM-Bedarf; der MACtime-'
+                             'Bulk bleibt immer in events.db.')
     parser.add_argument('--mode', choices=['auto', 'manual'], default='auto',
                         help='auto=vollautomatisch | manual=Kontrollmodus mit Tool-Auswahl pro Partition')
     parser.add_argument('--yara', choices=['custom', 'linux', 'full'], default='custom',
@@ -207,6 +211,7 @@ def _run_case_pipeline(args, images: list, output_dir: Path) -> int:
         interactive_mode    = (args.mode == 'manual'),
         yara_mode           = args.yara,
         max_read_mb         = args.max_read_mb,
+        max_events_in_ram   = args.max_events_in_ram,
         combined_case       = True,
     )
 
@@ -292,6 +297,7 @@ def _run_pipeline(args, image_path: Path, output_dir: Path) -> int:
         interactive_mode    = (args.mode == 'manual'),
         yara_mode           = args.yara,
         max_read_mb         = args.max_read_mb,
+        max_events_in_ram   = args.max_events_in_ram,
     )
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
