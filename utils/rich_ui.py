@@ -17,20 +17,19 @@ from rich.text import Text
 console = Console()
 
 STAGE_INFO = {
-    'stage_01':     ('01',     'Dateierkennung & Beweissicherung'),
-    'stage_02_mem': ('02_mem', 'RAM-Analyse (Volatility3)'),
-    'stage_02':     ('02',     'Partition-Layout'),
-    'stage_03':   ('03',    'System-Profiling'),
-    'stage_05':   ('05',    'Disk-Forensik'),
-    'stage_03_5': ('03.5',  'Basic Checks'),
-    'stage_06':   ('06',    'Log-Parsing (38 Parser)'),
-    'stage_07':   ('07',    'IOC-Extraktion'),
-    'stage_08':   ('08',    'Datennormalisierung'),
-    'stage_08_6': ('08.6',  'Konsistenzprüfung (Event-Korroboration)'),
-    'stage_09':   ('09',    'Anti-Forensics-Erkennung'),
-    'stage_8.5':  ('8.5',  'Forensische Timeline-Analyse'),
-    'stage_13':   ('13',    'Qualitätsprüfung'),
-    'stage_14':   ('14',    'Export & Archivierung'),
+    'stage_01':     ('01',   'Dateierkennung & Beweissicherung'),
+    'stage_02':     ('02',   'Partition-Layout'),
+    'stage_03':     ('03',   'System-Profiling'),
+    'stage_03_5':   ('04',   'Basic Checks'),
+    'stage_05':     ('05',   'Disk-Forensik'),
+    'stage_06':     ('06',   'Log-Parsing (38 Parser)'),
+    'stage_07':     ('07',   'IOC-Extraktion'),
+    'stage_08':     ('08',   'Datennormalisierung'),
+    'stage_08_6':   ('09',   'Konsistenzprüfung (Event-Korroboration)'),
+    'stage_09':     ('10',   'Anti-Forensics-Erkennung'),
+    'stage_8.5':    ('11',   'Forensische Timeline-Analyse'),
+    'stage_13':     ('12',   'Qualitätsprüfung'),
+    'stage_14':     ('13',   'Export & Archivierung'),
 }
 
 SPINNERS = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
@@ -486,7 +485,7 @@ class PipelineUI:
             t.add_row('Basic Checks werden durchgeführt sobald OS erkannt wird.')
             console.print(Panel(
                 t,
-                title=f'[bold cyan]Stage 03.5 — Basic Checks ({os_label})[/bold cyan]',
+                title=f'[bold cyan]Stage 04 — Basic Checks ({os_label})[/bold cyan]',
                 border_style='cyan', padding=(0, 1),
                 subtitle='[dim]⏭ Übersprungen[/dim]',
             ))
@@ -514,7 +513,7 @@ class PipelineUI:
 
         console.print(Panel(
             t,
-            title=f'[bold cyan]Stage 03.5 — Basic Checks ({os_label})[/bold cyan]',
+            title=f'[bold cyan]Stage 04 — Basic Checks ({os_label})[/bold cyan]',
             border_style='cyan', padding=(0, 1),
             subtitle=f'[bold yellow]Anomalien: {anomaly_count}[/bold yellow]' if anomaly_count else '[bold green]Keine Anomalien ✅[/bold green]',
             width=console.width,
@@ -531,7 +530,7 @@ class PipelineUI:
             t.add_row('Keine Korroboration moeglich — keine Basic-Checks oder events.db.')
             t.add_row('Geprüft wird: Log vorhanden aber 0 Events · Paket-Beleg per dpkg/apt.')
             console.print(Panel(
-                t, title='[bold cyan]Stage 08.6 — Konsistenzprüfung[/bold cyan]',
+                t, title='[bold cyan]Stage 09 — Konsistenzprüfung[/bold cyan]',
                 border_style='cyan', padding=(0, 1),
                 subtitle='[dim]keine Daten[/dim]'))
             return
@@ -560,7 +559,7 @@ class PipelineUI:
             t.add_row(*row)
 
         console.print(Panel(
-            t, title='[bold cyan]Stage 08.6 — Konsistenzprüfung (Event-Korroboration)[/bold cyan]',
+            t, title='[bold cyan]Stage 09 — Konsistenzprüfung (Event-Korroboration)[/bold cyan]',
             border_style='cyan', padding=(0, 1),
             subtitle=f'[bold yellow]Anomalien: {anomaly}[/bold yellow]' if anomaly
                      else '[bold green]Keine Anomalien ✅[/bold green]',
@@ -784,7 +783,7 @@ class PipelineUI:
         t.add_row('Hinweis', 'YARA optimiert fuer Malware-Erkennung.')
         t.add_row('', 'vmdetect-Treffer auf .py-Dateien sind bekannte False Positives.')
         console.print(Panel(t,
-            title='[bold cyan]Stage 09 — Anti-Forensics[/bold cyan]',
+            title='[bold cyan]Stage 10 — Anti-Forensics[/bold cyan]',
             border_style='cyan', padding=(0, 1)))
 
     def show_stage85_detail(self, ctx) -> None:
@@ -842,7 +841,7 @@ class PipelineUI:
 
         console.print(Panel(
             t,
-            title='[bold cyan]Stage 8.5 — Forensische Timeline-Analyse[/bold cyan]',
+            title='[bold cyan]Stage 11 — Forensische Timeline-Analyse[/bold cyan]',
             border_style='cyan',
             padding=(0, 1),
         ))
@@ -859,7 +858,7 @@ class PipelineUI:
         else:
             t.add_row('Status', Text('⚠️  Keine Summary erstellt', style='yellow'))
         console.print(Panel(t,
-            title='[bold cyan]Stage 12 — Ergebnis-Aggregation[/bold cyan]',
+            title='[bold cyan]Ergebnis-Aggregation (Executive Summary)[/bold cyan]',
             border_style='cyan', padding=(0, 1)))
 
     def show_stage13_detail(self, ctx) -> None:
@@ -882,7 +881,7 @@ class PipelineUI:
             for stage, err in list(ctx.stage_errors.items())[:3]:
                 t.add_row(Text(f'  ❌ {stage}', style='red'), err[:80])
         console.print(Panel(t,
-            title='[bold cyan]Stage 13 — Qualitätsprüfung[/bold cyan]',
+            title='[bold cyan]Stage 12 — Qualitätsprüfung[/bold cyan]',
             border_style='cyan', padding=(0, 1)))
 
     def show_stage14_detail(self, ctx) -> None:
@@ -916,7 +915,7 @@ class PipelineUI:
         else:
             t.add_row('Timesketch Upload', Text('✅  erfolgreich', style='green'))
         console.print(Panel(t,
-            title='[bold cyan]Stage 14 — Export & Archivierung[/bold cyan]',
+            title='[bold cyan]Stage 13 — Export & Archivierung[/bold cyan]',
             border_style='cyan', padding=(0, 1)))
 
     def show_parser_detail(self, ctx) -> None:
